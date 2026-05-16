@@ -1,0 +1,62 @@
+{
+  "botName": "Crolo Bot",
+  "botVersion": "1.0.0",
+  "author": "Crolo",
+  "prefix": "/",
+  "language": "en",
+  "timezone": "UTC",
+
+  "ownerID": "YOUR_FACEBOOK_ID_HERE",
+  "adminBot": [],
+  "superAdminBot": [],
+
+  "adminOnly": {
+    "enable": true,
+    "note": "When enabled, bot only replies to admins"
+  },
+
+  "facebookAccount": {
+    "email": "",
+    "password": "",
+    "userAgent": "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36",
+    "intervalGetNewCookie": 1440
+  },
+
+  "panel": {
+    "port": 8080,
+    "password": "crolo2026",
+    "secret": "crolo-secret-change-me"
+  },
+
+  "stealth": {
+    "enable": true,
+    "sleepHourStart": 2,
+    "sleepHourEnd": 6,
+    "note": "Bot simulates sleep between 2am-6am"
+  },
+
+  "mqttHealthCheck": {
+    "enable": true,
+    "silentTimeoutMinutes": 10,
+    "checkIntervalMinMinutes": 2,
+    "checkIntervalMaxMinutes": 5,
+    "maxRestarts": 5,
+    "notifyAdmins": true
+  },
+
+  "keepAlive": {
+    "enable": true,
+    "pingIntervalMinMinutes": 8,
+    "pingIntervalMaxMinutes": 15
+  },
+
+  "rateLimit": {
+    "maxMessagesPerWindow": 5,
+    "windowMs": 8000
+  },
+
+  "database": {
+    "type": "sqlite",
+    "path": "database/data/crolo.sqlite"
+  }
+}
