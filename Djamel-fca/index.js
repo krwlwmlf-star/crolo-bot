@@ -1,12 +1,12 @@
 /**
  * ╔══════════════════════════════════════════════════════════════════════╗
- * ║       DJAMEL-FCA v3.0 — Facebook Client Abstractions               ║
+ * ║       DJAMEL-FCA v3.1 — Facebook Client Abstractions               ║
  * ║       Built for Crolo Bot — Based on DAVID V1 by DJAMEL            ║
  * ║       Updated for 2026 compatibility                               ║
  * ╚══════════════════════════════════════════════════════════════════════╝
  *
  * Features:
- *  ✦ Cookie parsing: c3c, JSON Array, Netscape, Header String, Object
+ *  ✦ Cookie parsing: c3c, JSON Array (key/name), Netscape, Header String
  *  ✦ Live session validation via mbasic.facebook.com
  *  ✦ Human behavior simulation (typing delay, presence simulation)
  *  ✦ User-Agent rotation (8 real mobile agents)
@@ -41,36 +41,55 @@ function randomUA() {
   return UA_POOL[Math.floor(Math.random() * UA_POOL.length)];
 }
 
+// ─── Cookie Normalizer ────────────────────────────────────────────────────────
+// Ensures every cookie has both `key` (FCA format) and `name` (standard format)
+function normalizeCookie(c) {
+  if (!c || typeof c !== "object") return c;
+  const out = { ...c };
+  // If cookie uses `key` field (FCA/browser-extension format), ensure `name` is also set
+  if (out.key && !out.name) out.name = out.key;
+  // If cookie uses `name` field (standard format), ensure `key` is also set
+  if (out.name && !out.key) out.key = out.name;
+  return out;
+}
+
+function normalizeCookies(cookies) {
+  if (!Array.isArray(cookies)) return cookies;
+  return cookies.map(normalizeCookie);
+}
+
 // ─── Cookie Parsers ───────────────────────────────────────────────────────────
 function parseCookies(raw) {
   if (!raw || typeof raw !== "string") return null;
   raw = raw.trim();
 
-  // Empty
   if (!raw) return null;
 
-  // Try JSON (c3c / Array format)
+  // Try JSON (c3c / Array format — supports both {key:...} and {name:...})
   try {
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed;
-    if (parsed && typeof parsed === "object" && parsed.cookies) return parsed.cookies;
-    if (parsed && typeof parsed === "object") return parsed;
+    if (Array.isArray(parsed)) return normalizeCookies(parsed);
+    if (parsed && typeof parsed === "object" && Array.isArray(parsed.cookies))
+      return normalizeCookies(parsed.cookies);
+    if (parsed && typeof parsed === "object") return normalizeCookies([parsed]);
   } catch (_) {}
 
-  // Netscape format (contains "# Netscape HTTP Cookie File")
-  if (raw.includes("# Netscape") || raw.includes("\t")) {
+  // Netscape format (contains "# Netscape HTTP Cookie File" or tab-separated)
+  if (raw.includes("# Netscape") || (raw.includes("\t") && raw.split("\n").some(l => l.split("\t").length >= 7))) {
     const cookies = [];
     for (const line of raw.split("\n")) {
       const t = line.trim();
       if (!t || t.startsWith("#")) continue;
       const parts = t.split("\t");
       if (parts.length >= 7) {
+        const name = parts[5];
         cookies.push({
-          domain: parts[0],
+          key:    name,
+          name:   name,
+          domain: parts[0].replace(/^\./, ""),
           path:   parts[2],
           secure: parts[3] === "TRUE",
           expiry: parseInt(parts[4]) || 0,
-          name:   parts[5],
           value:  parts[6],
         });
       }
@@ -80,10 +99,13 @@ function parseCookies(raw) {
 
   // Header string format: "name=value; name2=value2"
   if (raw.includes("=")) {
-    return raw.split(";").map((p) => {
-      const [name, ...rest] = p.trim().split("=");
-      return { name: name.trim(), value: rest.join("=").trim() };
-    }).filter((c) => c.name && c.value);
+    const cookies = raw.split(";").map((p) => {
+      const [n, ...rest] = p.trim().split("=");
+      const name = n.trim();
+      const value = rest.join("=").trim();
+      return { key: name, name, value };
+    }).filter((c) => c.name && c.value !== undefined);
+    if (cookies.length) return cookies;
   }
 
   return null;
@@ -93,8 +115,10 @@ function deduplicateCookies(cookies) {
   if (!Array.isArray(cookies)) return cookies;
   const seen = new Map();
   for (const c of cookies) {
-    const key = `${c.name}||${c.domain || ""}`;
-    seen.set(key, c);
+    const cookieName = c.key || c.name || "";
+    const cookieDomain = c.domain || "";
+    const mapKey = `${cookieName}||${cookieDomain}`;
+    seen.set(mapKey, c);
   }
   return [...seen.values()];
 }
@@ -103,7 +127,7 @@ function deduplicateCookies(cookies) {
 async function validateSession(appState) {
   try {
     const cookieStr = Array.isArray(appState)
-      ? appState.map((c) => `${c.name}=${c.value}`).join("; ")
+      ? appState.map((c) => `${c.key || c.name}=${c.value}`).join("; ")
       : "";
 
     const res = await axios.get("https://mbasic.facebook.com/", {
@@ -129,11 +153,11 @@ async function validateSession(appState) {
 // ─── Human Typing Delay Calculator ───────────────────────────────────────────
 function calcTypingDelay(text = "") {
   const len = typeof text === "string" ? text.length : 0;
-  const wpm = 200 + Math.floor(Math.random() * 100);       // 200–300 wpm
+  const wpm = 200 + Math.floor(Math.random() * 100);
   const chars_per_sec = (wpm * 5) / 60;
   let delay = (len / chars_per_sec) * 1000;
-  delay = Math.max(800, Math.min(delay, 6000));              // 0.8s – 6s
-  delay += Math.floor(Math.random() * 400) - 200;            // ±200ms jitter
+  delay = Math.max(800, Math.min(delay, 6000));
+  delay += Math.floor(Math.random() * 400) - 200;
   return Math.round(delay);
 }
 
@@ -249,8 +273,11 @@ async function login(options = {}) {
     online:           false,
   };
 
-  const credentials = appState
-    ? { appState: deduplicateCookies(appState) }
+  // Normalize and deduplicate cookies before login
+  const normalizedState = appState ? normalizeCookies(appState) : null;
+
+  const credentials = normalizedState
+    ? { appState: deduplicateCookies(normalizedState) }
     : { email, password };
 
   let lastErr = null;
@@ -282,6 +309,8 @@ async function login(options = {}) {
 module.exports = {
   login,
   parseCookies,
+  normalizeCookies,
+  normalizeCookie,
   deduplicateCookies,
   validateSession,
   calcTypingDelay,
