@@ -32,10 +32,15 @@ function start() {
   restarts++;
   log(`Starting Crolo Bot... (attempt ${restarts})`);
 
-  child = spawn(process.execPath, [path.join(__dirname, "Bot.js")], {
-    stdio: "inherit",
-    env:   { ...process.env },
-  });
+  // Pass --experimental-sqlite so node:sqlite works in child process
+  child = spawn(
+    process.execPath,
+    ["--experimental-sqlite", path.join(__dirname, "Bot.js")],
+    {
+      stdio: "inherit",
+      env:   { ...process.env },
+    }
+  );
 
   if (stableTimer) clearTimeout(stableTimer);
   stableTimer = setTimeout(() => {

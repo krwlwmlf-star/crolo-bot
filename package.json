@@ -4,16 +4,16 @@
   "description": "Crolo Bot — Facebook Messenger Bot powered by Djamel-FCA",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "node Bot.js"
+    "start": "node --experimental-sqlite index.js",
+    "dev": "node --experimental-sqlite Bot.js",
+    "panel": "node --experimental-sqlite src/panel/server-standalone.js"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@dongdev/fca-unofficial": "*",
     "axios": "^1.7.9",
-    "better-sqlite3": "^9.6.0",
     "body-parser": "^1.20.3",
     "chalk": "^4.1.2",
     "express": "^4.19.2",

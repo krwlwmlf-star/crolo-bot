@@ -1,22 +1,24 @@
 /**
- * Crolo Bot — SQLite Database
- * Stores admins, config overrides, and bot state
+ * Crolo Bot — SQLite Database (uses Node.js built-in node:sqlite)
+ * No native compilation needed — works on Node.js 22+
  */
 "use strict";
 
-const Database = require("better-sqlite3");
-const path     = require("path");
-const fs       = require("fs-extra");
+const { DatabaseSync } = require("node:sqlite");
+const path = require("path");
+const fs   = require("fs-extra");
 
-const dbDir  = path.join(process.cwd(), "database/data");
+const dbDir  = path.join(process.cwd(), "database", "data");
 const dbPath = path.join(dbDir, "crolo.sqlite");
 
 fs.ensureDirSync(dbDir);
 
-const db = new Database(dbPath);
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
-db.pragma("synchronous = NORMAL");
+const db = new DatabaseSync(dbPath);
+
+// WAL mode for better concurrency
+db.exec("PRAGMA journal_mode = WAL;");
+db.exec("PRAGMA foreign_keys = ON;");
+db.exec("PRAGMA synchronous = NORMAL;");
 
 // ─── Schema ────────────────────────────────────────────────────────────────────
 db.exec(`
@@ -102,7 +104,7 @@ function getLatestCookie(label = "main") {
 }
 
 function getAllCookies() {
-  return db.prepare("SELECT * FROM cookies ORDER BY savedAt DESC").all();
+  return db.prepare("SELECT id, label, savedAt FROM cookies ORDER BY savedAt DESC").all();
 }
 
 function deleteCookie(id) {
