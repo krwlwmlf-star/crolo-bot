@@ -1,7 +1,6 @@
 /**
  * Crolo Bot — Admin Panel Server
- * Runs on port 8080 (separate from the bot)
- * Features: Auth, Admin management, Cookie update, Live logs, Stats
+ * David-bot style: panel manages the bot process lifecycle
  */
 "use strict";
 
@@ -27,7 +26,7 @@ const _tokens = new Map();
 
 function genToken() {
   const tok = crypto.randomBytes(24).toString("hex");
-  _tokens.set(tok, Date.now() + 4 * 60 * 60 * 1000); // 4h expiry
+  _tokens.set(tok, Date.now() + 4 * 60 * 60 * 1000);
   return tok;
 }
 
@@ -49,10 +48,10 @@ function authMiddleware(req, res, next) {
 function interceptLogs() {
   const origLog   = console.log.bind(console);
   const origError = console.error.bind(console);
+  const origWarn  = console.warn.bind(console);
 
   function capture(level, args) {
-    const line = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
-    // Strip ANSI color codes for storage
+    const line  = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
     const clean = line.replace(/\x1b\[[0-9;]*m/g, "");
     const entry = { ts: Date.now(), level, msg: clean };
     _logBuf.push(entry);
@@ -60,8 +59,28 @@ function interceptLogs() {
     if (_io) _io.emit("log", entry);
   }
 
-  console.log = (...args) => { origLog(...args); capture("info", args); };
+  console.log   = (...args) => { origLog(...args);   capture("info",  args); };
   console.error = (...args) => { origError(...args); capture("error", args); };
+  console.warn  = (...args) => { origWarn(...args);  capture("warn",  args); };
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtUptime(ms) {
+  const s   = Math.floor(ms / 1000);
+  const d   = Math.floor(s / 86400);
+  const h   = Math.floor((s % 86400) / 3600);
+  const m   = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const parts = [];
+  if (d)   parts.push(`${d}d`);
+  if (h)   parts.push(`${h}h`);
+  if (m)   parts.push(`${m}m`);
+  parts.push(`${sec}s`);
+  return parts.join(" ");
+}
+
+function getBotMgr() {
+  return global.botManager || null;
 }
 
 // ── Start panel ───────────────────────────────────────────────────────────────
@@ -83,15 +102,11 @@ function start(config = {}) {
   // ── Auth ──────────────────────────────────────────────────────────────────
   app.post("/api/login", (req, res) => {
     const { password: pw } = req.body || {};
-    // Re-read config in case it changed
     let cfg = config;
     try { cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")); } catch (_) {}
     const correct = cfg?.panel?.password || password;
-    if (pw !== correct) {
-      return res.status(401).json({ ok: false, error: "Wrong password" });
-    }
-    const token = genToken();
-    res.json({ ok: true, token });
+    if (pw !== correct) return res.status(401).json({ ok: false, error: "Wrong password" });
+    res.json({ ok: true, token: genToken() });
   });
 
   app.post("/api/logout", authMiddleware, (req, res) => {
@@ -102,28 +117,70 @@ function start(config = {}) {
 
   // ── Stats ─────────────────────────────────────────────────────────────────
   app.get("/api/stats", authMiddleware, (req, res) => {
+    try { require("../../database/db"); } catch (_) {}
     const { getAllAdmins } = require("../../database/db");
-    const start = global.CroloBot?.startTime || Date.now();
-    const upMs  = Date.now() - start;
-    const mem   = process.memoryUsage();
+    const panelStart = global.CroloBot?.startTime || Date.now();
+    const upMs       = Date.now() - panelStart;
+    const mem        = process.memoryUsage();
+    const botMgr     = getBotMgr();
+    const botStatus  = botMgr ? botMgr.getBotStatus() : { running: false };
+
     res.json({
       ok: true,
       uptime:     upMs,
       uptimeStr:  fmtUptime(upMs),
       botID:      global.CroloBot?.botID || null,
       commands:   global.CroloBot?.commands?.size || 0,
-      adminCount: getAllAdmins().length,
+      adminCount: (() => { try { return getAllAdmins().length; } catch (_) { return 0; } })(),
       memory: {
         rss:       Math.round(mem.rss / 1024 / 1024),
         heapUsed:  Math.round(mem.heapUsed / 1024 / 1024),
         heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
       },
-      nodeVersion: process.version,
-      platform:    process.platform,
-      botName:     global.CroloBot?.config?.botName || "Crolo Bot",
-      prefix:      global.CroloBot?.config?.prefix || "/",
-      adminOnly:   global.CroloBot?.config?.adminOnly?.enable !== false,
+      nodeVersion:  process.version,
+      platform:     process.platform,
+      botName:      global.CroloBot?.config?.botName   || config?.botName   || "Crolo Bot",
+      prefix:       global.CroloBot?.config?.prefix    || config?.prefix    || "/",
+      adminOnly:    global.CroloBot?.config?.adminOnly?.enable !== false,
+      botProcess:   botStatus,
+      hasCookies:   botMgr ? botMgr.hasCookies() : false,
     });
+  });
+
+  // ── Bot process control ───────────────────────────────────────────────────
+  app.get("/api/bot/status", authMiddleware, (req, res) => {
+    const botMgr = getBotMgr();
+    if (!botMgr) return res.json({ ok: true, running: false, managed: false });
+    res.json({ ok: true, managed: true, ...botMgr.getBotStatus() });
+  });
+
+  app.post("/api/bot/start", authMiddleware, (req, res) => {
+    const botMgr = getBotMgr();
+    if (!botMgr) return res.json({ ok: false, error: "Bot manager not available" });
+    if (!botMgr.hasCookies()) {
+      return res.status(400).json({ ok: false, error: "No cookies found. Add cookies first." });
+    }
+    const started = botMgr.startBot();
+    res.json({ ok: true, message: started ? "Bot starting..." : "Bot is already running" });
+  });
+
+  app.post("/api/bot/stop", authMiddleware, (req, res) => {
+    const botMgr = getBotMgr();
+    if (!botMgr) return res.json({ ok: false, error: "Bot manager not available" });
+    botMgr.stopBot();
+    res.json({ ok: true, message: "Bot stopped" });
+  });
+
+  app.post("/api/bot/restart", authMiddleware, (req, res) => {
+    const botMgr = getBotMgr();
+    if (botMgr) {
+      res.json({ ok: true, message: "Bot restarting..." });
+      setTimeout(() => botMgr.restartBot(), 300);
+    } else {
+      // Fallback: exit process so watchdog restarts it
+      res.json({ ok: true, message: "Restarting process..." });
+      setTimeout(() => process.exit(0), 500);
+    }
   });
 
   // ── Admins ────────────────────────────────────────────────────────────────
@@ -134,24 +191,18 @@ function start(config = {}) {
 
   app.post("/api/admins/add", authMiddleware, (req, res) => {
     const { userID, role } = req.body || {};
-    if (!userID || !/^\d+$/.test(String(userID))) {
+    if (!userID || !/^\d+$/.test(String(userID)))
       return res.status(400).json({ ok: false, error: "Invalid userID" });
-    }
     try {
       const { addAdmin, isAdmin } = require("../../database/db");
-      if (isAdmin(String(userID))) {
+      if (isAdmin(String(userID)))
         return res.status(400).json({ ok: false, error: "Already an admin" });
-      }
       addAdmin(String(userID), "panel", role || 2);
-
-      // Update in-memory config
       if (global.CroloBot?.config) {
         if (!Array.isArray(global.CroloBot.config.adminBot)) global.CroloBot.config.adminBot = [];
-        if (!global.CroloBot.config.adminBot.map(String).includes(String(userID))) {
+        if (!global.CroloBot.config.adminBot.map(String).includes(String(userID)))
           global.CroloBot.config.adminBot.push(String(userID));
-        }
       }
-
       res.json({ ok: true, message: `User ${userID} added as admin` });
     } catch (err) {
       res.status(500).json({ ok: false, error: err.message });
@@ -161,22 +212,16 @@ function start(config = {}) {
   app.post("/api/admins/remove", authMiddleware, (req, res) => {
     const { userID } = req.body || {};
     if (!userID) return res.status(400).json({ ok: false, error: "Missing userID" });
-
     const ownerID = String(global.CroloBot?.config?.ownerID || "");
-    if (String(userID) === ownerID) {
+    if (String(userID) === ownerID)
       return res.status(400).json({ ok: false, error: "Cannot remove owner" });
-    }
-
     try {
       const { removeAdmin } = require("../../database/db");
       removeAdmin(String(userID));
-
-      if (global.CroloBot?.config?.adminBot) {
+      if (global.CroloBot?.config?.adminBot)
         global.CroloBot.config.adminBot = global.CroloBot.config.adminBot.filter(
           (id) => String(id) !== String(userID)
         );
-      }
-
       res.json({ ok: true, message: `User ${userID} removed from admins` });
     } catch (err) {
       res.status(500).json({ ok: false, error: err.message });
@@ -186,10 +231,16 @@ function start(config = {}) {
   // ── Cookies ───────────────────────────────────────────────────────────────
   app.get("/api/cookies", authMiddleware, (req, res) => {
     try {
-      const raw = fs.readFileSync(ACCOUNT_PATH, "utf8").trim();
+      let raw = "";
+      try { raw = fs.readFileSync(ACCOUNT_PATH, "utf8").trim(); } catch (_) {}
       const { getAllCookies } = require("../../database/db");
-      const history = getAllCookies().slice(0, 10);
-      res.json({ ok: true, current: raw ? raw.substring(0, 100) + "..." : "(empty)", history });
+      const history = (() => { try { return getAllCookies().slice(0, 10); } catch (_) { return []; } })();
+      res.json({
+        ok: true,
+        current:    raw ? raw.substring(0, 120) + "..." : "(empty — no cookies set)",
+        hasCookies: raw.length > 10,
+        history,
+      });
     } catch (err) {
       res.status(500).json({ ok: false, error: err.message });
     }
@@ -197,23 +248,30 @@ function start(config = {}) {
 
   app.post("/api/cookies/update", authMiddleware, (req, res) => {
     const { cookies } = req.body || {};
-    if (!cookies || typeof cookies !== "string") {
+    if (!cookies || typeof cookies !== "string")
       return res.status(400).json({ ok: false, error: "Missing or invalid cookies" });
-    }
+
     try {
       const DjamelFCA = require("../../Djamel-fca");
       const parsed    = DjamelFCA.parseCookies(cookies);
-      if (!parsed) {
-        return res.status(400).json({ ok: false, error: "Could not parse cookies — invalid format" });
-      }
+      if (!parsed || !parsed.length)
+        return res.status(400).json({ ok: false, error: "Could not parse cookies — check the format" });
+
+      // Validate there is a c_user or similar key present
+      const hasSession = parsed.some(c => (c.key || c.name) === "c_user");
+      if (!hasSession)
+        return res.status(400).json({ ok: false, error: "Cookies look invalid — c_user not found. Make sure you are pasting valid Facebook session cookies." });
 
       const json = JSON.stringify(parsed, null, 2);
       fs.writeFileSync(ACCOUNT_PATH, json, "utf8");
 
-      const { saveCookie } = require("../../database/db");
-      saveCookie(json, "main");
+      try {
+        const { saveCookie } = require("../../database/db");
+        saveCookie(json, "main");
+      } catch (_) {}
 
-      res.json({ ok: true, message: "Cookies updated. Restart bot to apply." });
+      console.log(`[PANEL] Cookies updated (${parsed.length} cookies)`);
+      res.json({ ok: true, message: `✓ ${parsed.length} cookies saved. Click "Start Bot" or restart to apply.` });
     } catch (err) {
       res.status(500).json({ ok: false, error: err.message });
     }
@@ -222,10 +280,9 @@ function start(config = {}) {
   // ── Config ────────────────────────────────────────────────────────────────
   app.get("/api/config", authMiddleware, (req, res) => {
     try {
-      const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-      // Remove sensitive fields before sending
+      const cfg  = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
       const safe = { ...cfg };
-      delete safe.facebookAccount?.password;
+      if (safe.facebookAccount) delete safe.facebookAccount.password;
       res.json({ ok: true, config: safe });
     } catch (err) {
       res.status(500).json({ ok: false, error: err.message });
@@ -235,18 +292,11 @@ function start(config = {}) {
   app.post("/api/config/update", authMiddleware, (req, res) => {
     const { key, value } = req.body || {};
     if (!key) return res.status(400).json({ ok: false, error: "Missing key" });
-
-    // Allowed keys for safety
     const allowed = ["botName", "prefix", "timezone", "adminOnly", "stealth", "rateLimit", "panel"];
-    const rootKey = key.split(".")[0];
-    if (!allowed.includes(rootKey)) {
-      return res.status(400).json({ ok: false, error: `Key '${rootKey}' is not editable via panel` });
-    }
-
+    if (!allowed.includes(key.split(".")[0]))
+      return res.status(400).json({ ok: false, error: `Key '${key.split(".")[0]}' is not editable via panel` });
     try {
-      const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-
-      // Support dot-notation
+      const cfg  = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
       const keys = key.split(".");
       let obj    = cfg;
       for (let i = 0; i < keys.length - 1; i++) {
@@ -254,20 +304,15 @@ function start(config = {}) {
         obj = obj[keys[i]];
       }
       obj[keys[keys.length - 1]] = value;
-
       fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), "utf8");
-
-      // Apply to running config
       if (global.CroloBot?.config) {
-        const rCfg = global.CroloBot.config;
-        let rObj   = rCfg;
+        let rObj = global.CroloBot.config;
         for (let i = 0; i < keys.length - 1; i++) {
           if (!rObj[keys[i]]) rObj[keys[i]] = {};
           rObj = rObj[keys[i]];
         }
         rObj[keys[keys.length - 1]] = value;
       }
-
       res.json({ ok: true, message: `Config '${key}' updated` });
     } catch (err) {
       res.status(500).json({ ok: false, error: err.message });
@@ -277,12 +322,6 @@ function start(config = {}) {
   // ── Logs ──────────────────────────────────────────────────────────────────
   app.get("/api/logs", authMiddleware, (req, res) => {
     res.json({ ok: true, logs: _logBuf.slice(-200) });
-  });
-
-  // ── Bot actions ───────────────────────────────────────────────────────────
-  app.post("/api/bot/restart", authMiddleware, (req, res) => {
-    res.json({ ok: true, message: "Bot restarting..." });
-    setTimeout(() => process.exit(0), 500);
   });
 
   // ── Socket.io ─────────────────────────────────────────────────────────────
@@ -297,23 +336,9 @@ function start(config = {}) {
     res.sendFile(path.join(__dirname, "public", "index.html"));
   });
 
-  server.listen(port, () => {
-    console.log(`[PANEL] Admin panel running at http://localhost:${port}`);
+  server.listen(port, "0.0.0.0", () => {
+    console.log(`[PANEL] Admin panel running at http://0.0.0.0:${port}`);
   });
-}
-
-function fmtUptime(ms) {
-  const s   = Math.floor(ms / 1000);
-  const d   = Math.floor(s / 86400);
-  const h   = Math.floor((s % 86400) / 3600);
-  const m   = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  const parts = [];
-  if (d)   parts.push(`${d}d`);
-  if (h)   parts.push(`${h}h`);
-  if (m)   parts.push(`${m}m`);
-  parts.push(`${sec}s`);
-  return parts.join(" ");
 }
 
 module.exports = { start };
