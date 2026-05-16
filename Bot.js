@@ -71,7 +71,7 @@ function printBanner(config) {
   console.log(g("╚══════════════════════════════════════════╝") + "\n");
   console.log(chalk.cyan(`  Bot Name : ${config.botName || "Crolo Bot"}`));
   console.log(chalk.cyan(`  Prefix   : ${config.prefix || "/"}`));
-  console.log(chalk.cyan(`  Panel    : http://localhost:${config.panel?.port || 8080}`));
+  console.log(chalk.cyan(`  Panel    : running separately (port ${config.panel?.port || 3000})`));
   console.log(chalk.cyan(`  Started  : ${moment().tz(config.timezone || "UTC").format("YYYY-MM-DD HH:mm:ss z")}`));
   console.log();
 }
@@ -145,14 +145,6 @@ async function startBot() {
   // Load commands
   const commands = loadCommands("src/commands");
   global.CroloBot.commands = commands;
-
-  // Start panel server
-  try {
-    const panel = require("./src/panel/server");
-    panel.start(config);
-  } catch (err) {
-    global.log?.warn?.("PANEL", `Panel failed to start: ${err.message}`);
-  }
 
   // Load cookies
   const appState = loadCookies();

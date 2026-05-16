@@ -66,8 +66,8 @@ function interceptLogs() {
 
 // ── Start panel ───────────────────────────────────────────────────────────────
 function start(config = {}) {
-  const port     = config?.panel?.port || 8080;
-  const password = config?.panel?.password || "crolo2026";
+  const port     = process.env.PORT || config?.panel?.port || 3000;
+  const password = config?.panel?.password || "Crolo2026";
 
   interceptLogs();
 
