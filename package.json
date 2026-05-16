@@ -1,0 +1,28 @@
+{
+  "name": "crolo-bot",
+  "version": "1.0.0",
+  "description": "Crolo Bot — Facebook Messenger Bot powered by Djamel-FCA",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node Bot.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@dongdev/fca-unofficial": "*",
+    "axios": "^1.7.9",
+    "better-sqlite3": "^9.6.0",
+    "body-parser": "^1.20.3",
+    "chalk": "^4.1.2",
+    "express": "^4.19.2",
+    "fs-extra": "^11.2.0",
+    "gradient-string": "^2.0.2",
+    "moment-timezone": "^0.5.45",
+    "mqtt": "^5.10.1",
+    "socket.io": "^4.8.1"
+  },
+  "author": "Crolo",
+  "license": "UNLICENSED"
+}
