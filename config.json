@@ -6,9 +6,9 @@
   "language": "en",
   "timezone": "UTC",
 
-  "ownerID": "YOUR_FACEBOOK_ID_HERE",
-  "adminBot": [],
-  "superAdminBot": [],
+  "ownerID": "61585535062339",
+  "adminBot": ["61585535062339"],
+  "superAdminBot": ["61585535062339"],
 
   "adminOnly": {
     "enable": true,
