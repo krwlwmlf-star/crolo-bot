@@ -1,35 +1,20 @@
-/**
- * Crolo Bot — Natural Presence
- * Periodically changes online/offline status to appear human
- */
-"use strict";
+'use strict';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
-let _active = false;
-let _timer  = null;
+let _running = false; const _timers = [];
+function addTimer(fn, ms) { const id = setTimeout(fn, ms); _timers.push(id); return id; }
+function clearAll() { _timers.forEach(id => clearTimeout(id)); _timers.length = 0; }
 
-function start(api) {
+async function doPresence(api) {
+  const cfg = global.config?.stealth || {};
+  if (cfg.enable === false || !_running) return;
   try {
-    _active = true;
-    if (!api) return;
-    function randomPresence() {
-      try {
-        if (api && typeof api.setOptions === "function") {
-          const online = Math.random() > 0.3;
-          api.setOptions({ online });
-        }
-      } catch (_) {}
-      const delay = 5 * 60000 + Math.floor(Math.random() * 10 * 60000);
-      _timer = setTimeout(randomPresence, delay);
-    }
-    randomPresence();
+    if (api && typeof api.setOptions === 'function') api.setOptions({ online: true });
   } catch (_) {}
+  addTimer(() => doPresence(api), randInt(5, 15) * 60000);
 }
 
-function stop() {
-  try { _active = false; if (_timer) { clearTimeout(_timer); _timer = null; } } catch (_) {}
-}
-
-function wrapSendMessage(api) { try { start(api); } catch (_) {} }
-function wrapWithTyping(api)  { try { start(api); } catch (_) {} }
-
-module.exports = { start, stop, wrapSendMessage, wrapWithTyping, isActive: () => _active };
+function start(api) { if (_running) return; _running = true; addTimer(() => doPresence(api), randInt(2, 8) * 60000); }
+function stop() { _running = false; clearAll(); }
+module.exports = { start, stop, isRunning: () => _running };
