@@ -166,6 +166,28 @@ async function handleMessage(api, event) {
       }
     } catch (_) {}
 
+    // ── Pending input check (e.g. awaiting name for /جرائد) ───────────────────
+    const pendingKey = `${senderID}:${event.threadID}`;
+    const pendingMap = global.CroloBot?.pending;
+    if (pendingMap?.has(pendingKey)) {
+      const state = pendingMap.get(pendingKey);
+      pendingMap.delete(pendingKey);
+
+      if (state.type === "jarayed") {
+        const name = body.trim();
+        if (!name) {
+          api.sendMessage("⚠️ لم يتم إدخال اسم. أعد المحاولة بـ /جرائد", event.threadID);
+          return;
+        }
+        const jarayed = global.CroloBot?.commands?.get("جرائد");
+        if (jarayed?.startWithName) {
+          api.sendMessage(`✅ سيبدأ الإرسال إلى "${name}" الآن...`, event.threadID);
+          await jarayed.startWithName(api, event.threadID, name);
+        }
+        return;
+      }
+    }
+
     const prefix  = global.CroloBot?.config?.prefix || "/";
     const commands = global.CroloBot?.commands;
 
