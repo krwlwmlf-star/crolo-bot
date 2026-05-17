@@ -252,18 +252,35 @@ function start(config = {}) {
       return res.status(400).json({ ok: false, error: "Missing or invalid cookies" });
 
     try {
-      const DjamelFCA = require("../../Djamel-fca");
-      const parsed    = DjamelFCA.parseCookies(cookies);
-      if (!parsed || !parsed.length)
-        return res.status(400).json({ ok: false, error: "Could not parse cookies — check the format" });
+      const { parseCookieInput, hasMandatory } = require("../utils/cookieParser");
+      let parsed, isToken = false;
+      try {
+        const result = parseCookieInput(cookies);
+        parsed  = result.cookies;
+        isToken = result.isToken;
+      } catch (pe) {
+        return res.status(400).json({ ok: false, error: "صيغة الكوكيز غير مدعومة: " + pe.message });
+      }
 
-      // Validate there is a c_user or similar key present
-      const hasSession = parsed.some(c => (c.key || c.name) === "c_user");
-      if (!hasSession)
-        return res.status(400).json({ ok: false, error: "Cookies look invalid — c_user not found. Make sure you are pasting valid Facebook session cookies." });
+      if (isToken) {
+        // Token — save as-is for getFbstateFromToken to handle on next start
+        fs.writeFileSync(ACCOUNT_PATH, cookies.trim(), "utf8");
+        global._dashCookieWrite = true;
+        setTimeout(() => { global._dashCookieWrite = false; }, 6000);
+        console.log("[PANEL] Token saved — will convert on next bot start");
+        return res.json({ ok: true, message: "✓ التوكن محفوظ. اضغط Start Bot لتشغيل البوت." });
+      }
+
+      if (!parsed || !parsed.length)
+        return res.status(400).json({ ok: false, error: "لم يتم التعرف على كوكيز صالحة في المدخل." });
+
+      if (!hasMandatory(parsed))
+        return res.status(400).json({ ok: false, error: "الكوكيز تبدو غير صالحة — c_user أو xs مفقودان." });
 
       const json = JSON.stringify(parsed, null, 2);
+      global._dashCookieWrite = true;
       fs.writeFileSync(ACCOUNT_PATH, json, "utf8");
+      setTimeout(() => { global._dashCookieWrite = false; }, 6000);
 
       try {
         const { saveCookie } = require("../../database/db");
@@ -271,7 +288,7 @@ function start(config = {}) {
       } catch (_) {}
 
       console.log(`[PANEL] Cookies updated (${parsed.length} cookies)`);
-      res.json({ ok: true, message: `✓ ${parsed.length} cookies saved. Click "Start Bot" or restart to apply.` });
+      res.json({ ok: true, message: `✓ ${parsed.length} كوكي محفوظة. اضغط Start Bot أو Restart للتطبيق.` });
     } catch (err) {
       res.status(500).json({ ok: false, error: err.message });
     }
