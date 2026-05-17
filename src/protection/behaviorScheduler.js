@@ -1,43 +1,16 @@
-/**
- * Crolo Bot — Behavior Scheduler
- * Schedules random human-like behaviors at varied intervals
- */
-"use strict";
+'use strict';
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+let _running = false;
 
-let _active  = false;
-let _timers  = [];
-
-function scheduleRandom(fn, minMs, maxMs) {
-  const delay = minMs + Math.floor(Math.random() * (maxMs - minMs));
-  const t = setTimeout(() => {
-    try { fn(); } catch (_) {}
-    scheduleRandom(fn, minMs, maxMs);
-  }, delay);
-  _timers.push(t);
+function start() { _running = true; }
+function stop() { _running = false; }
+function calcResponseDelay(incomingText) {
+  const cfg = global.config?.behaviorScheduler || {};
+  if (cfg.enable === false) return 0;
+  const len = String(incomingText || '').length;
+  const base = randInt(800, 4000);
+  const readDelay = Math.min(len * 40, 5000);
+  return base + readDelay;
 }
 
-function start(api) {
-  try {
-    _active = true;
-    if (!api) return;
-    // Randomly check presence every 5-15 min
-    scheduleRandom(() => {
-      try {
-        if (typeof api?.getAppState === "function") api.getAppState();
-      } catch (_) {}
-    }, 5 * 60000, 15 * 60000);
-  } catch (_) {}
-}
-
-function stop() {
-  try {
-    _active = false;
-    _timers.forEach((t) => clearTimeout(t));
-    _timers = [];
-  } catch (_) {}
-}
-
-function wrapSendMessage(api) { try { start(api); } catch (_) {} }
-function wrapWithTyping(api)  { try { start(api); } catch (_) {} }
-
-module.exports = { start, stop, wrapSendMessage, wrapWithTyping, isActive: () => _active };
+module.exports = { start, stop, calcResponseDelay };
