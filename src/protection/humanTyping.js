@@ -1,32 +1,51 @@
-/**
- * Crolo Bot — Human Typing Simulator
- * Simulates realistic human typing delays and indicators
- */
 "use strict";
 
-let _active = false;
-let _api    = null;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
-function start(api) {
-  try { _active = true; _api = api; } catch (_) {}
+function extractText(msg) {
+  if (!msg) return "";
+  if (typeof msg === "string") return msg;
+  if (typeof msg === "object") return msg.body || msg.message || msg.text || "";
+  return "";
 }
 
-function stop() {
-  try { _active = false; _api = null; } catch (_) {}
+function calcTypingDelay(text) {
+  const len = (text || "").length;
+  if (len === 0) return randInt(600, 1200);
+  const base = Math.min(Math.max(len * 35, 700), 7000);
+  return Math.round(base * (0.75 + Math.random() * 0.50));
 }
 
-/**
- * Send typing indicator for a calculated duration based on message length
- */
-async function sendTyping(api, threadID, text = "") {
+async function sendTypingIndicator(api, threadID) {
   try {
-    const fca = require("../../Djamel-fca");
-    const delay = fca.calcTypingDelay(text);
-    await fca.simulateTyping(api || _api, threadID, delay);
+    await new Promise((resolve) => {
+      const result = api.sendTypingIndicator(threadID, () => resolve());
+      if (result && typeof result.then === "function") result.then(resolve).catch(resolve);
+      setTimeout(resolve, 500);
+    });
   } catch (_) {}
 }
 
-function wrapSendMessage(api) { try { start(api); } catch (_) {} }
-function wrapWithTyping(api)  { try { start(api); } catch (_) {} }
+async function simulateTyping(api, threadID, msg) {
+  const cfg = global.config?.humanTyping || {};
+  if (cfg.enable === false) return;
+  const text = extractText(msg);
+  const delay = calcTypingDelay(text);
+  await sendTypingIndicator(api, threadID);
+  await sleep(delay);
+  await sleep(randInt(150, 450));
+}
 
-module.exports = { start, stop, sendTyping, wrapSendMessage, wrapWithTyping, isActive: () => _active };
+function wrapWithTyping(api) {
+  if (api.__typingWrapped) return;
+  api.__typingWrapped = true;
+  const _orig = api.sendMessage.bind(api);
+  api.sendMessage = async function(msg, threadID, callback, messageID) {
+    try { await simulateTyping(api, threadID, msg); } catch (_) {}
+    return _orig(msg, threadID, callback, messageID);
+  };
+  console.log("[HUMAN_TYPING] ✅ api.sendMessage wrapped — typing active");
+}
+
+module.exports = { wrapWithTyping, simulateTyping, calcTypingDelay };
