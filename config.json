@@ -5,23 +5,23 @@
   "prefix": "/",
   "language": "ar",
   "timezone": "Africa/Algiers",
-
   "ownerID": "61585535062339",
-  "adminIDs": ["61585535062339"],
-  "superAdminBot": ["61585535062339"],
-
+  "adminIDs": [
+    "61585535062339",
+    "61586564816178"
+  ],
+  "superAdminBot": [
+    "61585535062339"
+  ],
   "userAgent": "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36",
-
   "panel": {
     "port": 5000,
     "password": "Crolo2026",
     "secret": "crolo-secret-change-me"
   },
-
   "humanTyping": {
     "enable": true
   },
-
   "stealth": {
     "enable": true,
     "sleepHourStart": 2,
@@ -34,7 +34,6 @@
       "coolingMaxSeconds": 80
     }
   },
-
   "mqttHealthCheck": {
     "enable": true,
     "silentTimeoutMinutes": 10,
@@ -44,42 +43,33 @@
     "backoffMultiplier": 1.5,
     "maxBackoffMinutes": 15
   },
-
   "keepAlive": {
     "enable": true
   },
-
   "humanReadReceipt": {
     "enable": true,
     "minDelayMs": 1500,
     "maxDelayMs": 8000
   },
-
   "reactionDelay": {
     "enable": true
   },
-
   "duplicateGuard": {
     "enable": true,
     "windowSeconds": 8
   },
-
   "rateLimit": {
     "maxMessagesPerWindow": 10,
     "windowMs": 8000
   },
-
   "groupEvents": {
     "welcomeMessage": "أهلاً {name} في المجموعة!",
     "leaveMessage": "وداعاً {name}!"
   },
-
   "backupIntervalMinutes": 60,
-
   "database": {
     "type": "sqlite",
     "path": "database/data/bot.db"
   },
-
   "cronJobs": []
 }
