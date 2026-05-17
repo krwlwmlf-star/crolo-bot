@@ -184,40 +184,91 @@ async function startBot() {
   mqttHealth.start();
   keepAlive.start();
 
+  // Keep process alive regardless of MQTT state
+  const _keepAliveTimer = setInterval(() => {}, 30000);
+
+  // MQTT reconnect state
+  let mqttRetryCount   = 0;
+  let mqttRetryTimer   = null;
+  let currentApi       = api;
+  let mqttRunning      = false;
+
+  function scheduleReconnect(delayMs) {
+    if (mqttRetryTimer) return;
+    const waitSec = Math.round(delayMs / 1000);
+    global.log?.warn?.("MQTT", `Will retry MQTT in ${waitSec}s (attempt ${mqttRetryCount + 1})...`);
+    mqttRetryTimer = setTimeout(async () => {
+      mqttRetryTimer = null;
+      mqttRetryCount++;
+      try {
+        global.log?.warn?.("MQTT", "Re-logging in for MQTT reconnect...");
+        const newApi = await DjamelFCA.login({
+          appState:          loadCookies(),
+          userAgent:         DjamelFCA.randomUA(),
+          onAppStateUpdate:  saveAppState,
+          maxRetries:        2,
+        });
+        currentApi                = newApi;
+        global.CroloBot.fcaApi    = newApi;
+        global.log?.success?.("MQTT", "Re-login OK — starting MQTT...");
+        startListening(newApi);
+      } catch (err) {
+        global.log?.error?.("MQTT", `Re-login failed: ${err.message}`);
+        const nextDelay = Math.min(60000 * mqttRetryCount, 300000);
+        scheduleReconnect(nextDelay);
+      }
+    }, delayMs);
+  }
+
+  function startListening(listenApi) {
+    if (mqttRunning) return;
+    mqttRunning = true;
+    global.log?.info?.("BOT", "Listening for messages...");
+
+    listenApi.listenMqtt(async (err, event) => {
+      if (err) {
+        const msg = err?.error || err?.message || String(err);
+        global.log?.error?.("MQTT", msg);
+        mqttRunning = false;
+        // Retry after backoff — max 5 min
+        const delay = Math.min(15000 * Math.pow(1.8, mqttRetryCount), 300000);
+        scheduleReconnect(delay);
+        return;
+      }
+      // Successful event — reset retry counter
+      mqttRetryCount = 0;
+      try {
+        await handlerEvents(listenApi, event);
+      } catch (e) {
+        global.log?.error?.("HANDLER", e.message);
+      }
+    });
+  }
+
   // Re-login function for MQTT health check
   global.CroloBot.reLoginBot = async () => {
     global.log?.warn?.("RELOGIN", "Attempting re-login...");
     try {
       const newApi = await DjamelFCA.login({
-        appState: loadCookies(),
-        userAgent: DjamelFCA.randomUA(),
+        appState:         loadCookies(),
+        userAgent:        DjamelFCA.randomUA(),
         onAppStateUpdate: saveAppState,
-        maxRetries: 2,
+        maxRetries:       2,
       });
+      currentApi             = newApi;
       global.CroloBot.fcaApi = newApi;
+      mqttRunning            = false;
       global.log?.success?.("RELOGIN", "Re-login successful");
+      startListening(newApi);
     } catch (err) {
       global.log?.error?.("RELOGIN", `Re-login failed: ${err.message}`);
     }
   };
 
-  // Start listening
-  global.log?.info?.("BOT", "Listening for messages...");
-
-  api.listenMqtt(async (err, event) => {
-    if (err) {
-      global.log?.error?.("MQTT", err.message || String(err));
-      return;
-    }
-    try {
-      await handlerEvents(api, event);
-    } catch (e) {
-      global.log?.error?.("HANDLER", e.message);
-    }
-  });
-
   global.log?.success?.("BOT", `Crolo Bot is running! Prefix: ${config.prefix || "/"}`);
   global.log?.success?.("BOT", `Admin-only mode: ${config.adminOnly?.enable !== false ? "ON" : "OFF"}`);
+
+  startListening(currentApi);
 }
 
 startBot().catch((err) => {
