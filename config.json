@@ -1,38 +1,37 @@
 {
   "botName": "Crolo Bot",
-  "botVersion": "1.0.0",
+  "botVersion": "3.2.0",
   "author": "Crolo",
   "prefix": "/",
-  "language": "en",
-  "timezone": "UTC",
+  "language": "ar",
+  "timezone": "Africa/Algiers",
 
-  "ownerID": "61585535062339",
-  "adminBot": ["61585535062339"],
-  "superAdminBot": ["61585535062339"],
+  "ownerID": "61589770358193",
+  "adminIDs": ["61589770358193"],
 
-  "adminOnly": {
-    "enable": true,
-    "note": "When enabled, bot only replies to admins"
-  },
-
-  "facebookAccount": {
-    "email": "",
-    "password": "",
-    "userAgent": "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36",
-    "intervalGetNewCookie": 1440
-  },
+  "userAgent": "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36",
 
   "panel": {
-    "port": 3000,
+    "port": 5000,
     "password": "Crolo2026",
     "secret": "crolo-secret-change-me"
+  },
+
+  "humanTyping": {
+    "enable": true
   },
 
   "stealth": {
     "enable": true,
     "sleepHourStart": 2,
     "sleepHourEnd": 6,
-    "note": "Bot simulates sleep between 2am-6am"
+    "outgoingThrottle": {
+      "enable": true,
+      "maxPerThread": 12,
+      "threadWindowMinutes": 5,
+      "coolingMinSeconds": 15,
+      "coolingMaxSeconds": 80
+    }
   },
 
   "mqttHealthCheck": {
@@ -41,22 +40,45 @@
     "checkIntervalMinMinutes": 2,
     "checkIntervalMaxMinutes": 5,
     "maxRestarts": 5,
-    "notifyAdmins": true
+    "backoffMultiplier": 1.5,
+    "maxBackoffMinutes": 15
   },
 
   "keepAlive": {
+    "enable": true
+  },
+
+  "humanReadReceipt": {
     "enable": true,
-    "pingIntervalMinMinutes": 8,
-    "pingIntervalMaxMinutes": 15
+    "minDelayMs": 1500,
+    "maxDelayMs": 8000
+  },
+
+  "reactionDelay": {
+    "enable": true
+  },
+
+  "duplicateGuard": {
+    "enable": true,
+    "windowSeconds": 8
   },
 
   "rateLimit": {
-    "maxMessagesPerWindow": 5,
+    "maxMessagesPerWindow": 10,
     "windowMs": 8000
   },
 
+  "groupEvents": {
+    "welcomeMessage": "أهلاً {name} في المجموعة!",
+    "leaveMessage": "وداعاً {name}!"
+  },
+
+  "backupIntervalMinutes": 60,
+
   "database": {
     "type": "sqlite",
-    "path": "database/data/crolo.sqlite"
-  }
+    "path": "database/data/bot.db"
+  },
+
+  "cronJobs": []
 }
