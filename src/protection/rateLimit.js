@@ -1,35 +1,30 @@
-/**
- * Crolo Bot — Rate Limiter
- */
-"use strict";
+'use strict';
+const store = new Map();
 
-const _windows = new Map();
+function check(key, maxEvents, windowMs) {
+  const now = Date.now();
+  if (!store.has(key)) store.set(key, { events: [], warned: false });
+  const entry = store.get(key);
+  entry.events = entry.events.filter(t => now - t < windowMs);
+  entry.events.push(now);
+  return { exceeded: entry.events.length > maxEvents, warned: entry.warned };
+}
 
+function setWarned(key) { if (store.has(key)) store.get(key).warned = true; }
+function reset(key) { store.delete(key); }
+
+// Legacy API for old commands
 function isLimited(senderID) {
-  const cfg = global.CroloBot?.config?.rateLimit || {};
-  const max  = cfg.maxMessagesPerWindow || 5;
-  const win  = cfg.windowMs || 8000;
-  const now  = Date.now();
-  const key  = String(senderID);
-
-  if (!_windows.has(key)) {
-    _windows.set(key, { count: 1, start: now });
-    return false;
-  }
-
-  const w = _windows.get(key);
-  if (now - w.start > win) {
-    _windows.set(key, { count: 1, start: now });
-    return false;
-  }
-
-  w.count++;
-  if (w.count > max) return true;
-  return false;
+  const res = check(senderID, 10, 8000);
+  return res.exceeded;
 }
 
-function reset(senderID) {
-  _windows.delete(String(senderID));
-}
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of store.entries()) {
+    entry.events = entry.events.filter(t => now - t < 60000);
+    if (entry.events.length === 0) store.delete(key);
+  }
+}, 5 * 60 * 1000);
 
-module.exports = { isLimited, reset };
+module.exports = { check, setWarned, reset, isLimited };
