@@ -40,6 +40,65 @@ function buildMessage(api, event) {
   };
 }
 
+// ─── Auto-feature Handlers ────────────────────────────────────────────────────
+
+async function handleLockName(api, event) {
+  const locked = global.CroloBot?.locked?.names;
+  if (!locked) return;
+  const threadID  = String(event.threadID);
+  const lockedName = locked.get(threadID);
+  if (!lockedName) return;
+  // event.logMessageData.name is the new name that was set
+  const newName = event.logMessageData?.name || event.snippet || "";
+  if (newName && newName !== lockedName) {
+    try {
+      await sleep(1000);
+      await new Promise((res, rej) =>
+        api.setTitle(lockedName, threadID, (err) => err ? rej(err) : res())
+      );
+    } catch (_) {}
+  }
+}
+
+async function handleLockNick(api, event) {
+  const locked = global.CroloBot?.locked?.nicknames;
+  if (!locked) return;
+  const threadID = String(event.threadID);
+  const config   = locked.get(threadID);
+  if (!config) return;
+  // Someone changed a nickname — restore it
+  const userID = event.logMessageData?.participant_id
+    || event.logMessageData?.user_id
+    || null;
+  if (!userID) return;
+  try {
+    await sleep(1500);
+    await new Promise((res, rej) =>
+      api.changeNickname(config.nick, threadID, userID, (err) => err ? rej(err) : res())
+    );
+  } catch (_) {}
+}
+
+async function handleAutoRejoin(api, event) {
+  const ar = global.CroloBot?.locked?.autoRejoin;
+  if (!ar) return;
+  const threadID = String(event.threadID);
+  if (!ar.has(threadID)) return;
+  // Get the user who left
+  const leftUserID = event.logMessageData?.leftParticipantFbId
+    || (event.logMessageData?.participant_ids || [])[0]
+    || null;
+  if (!leftUserID) return;
+  const botID = String(global.CroloBot?.botID || "");
+  if (String(leftUserID) === botID) return;
+  try {
+    await sleep(2000);
+    await new Promise((res, rej) =>
+      api.addUserToGroup(leftUserID, threadID, (err) => err ? rej(err) : res())
+    );
+  } catch (_) {}
+}
+
 // ─── Main Handler ─────────────────────────────────────────────────────────────
 async function handlerEvents(api, event) {
   try {
@@ -53,6 +112,20 @@ async function handlerEvents(api, event) {
 
     // Ignore self
     if (senderID === botID) return;
+
+    // ── Group event handlers (no admin check needed) ────────────────────────────
+    if (event.type === "event") {
+      const logType = event.logMessageType || "";
+
+      if (logType === "log:thread-name") {
+        await handleLockName(api, event);
+      } else if (logType === "log:user-nickname") {
+        await handleLockNick(api, event);
+      } else if (logType === "log:unsubscribe") {
+        await handleAutoRejoin(api, event);
+      }
+      return;
+    }
 
     // ── Admin-Only Guard ────────────────────────────────────────────────────────
     const adminOnlyCfg = global.CroloBot?.config?.adminOnly;
