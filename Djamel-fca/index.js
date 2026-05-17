@@ -267,10 +267,10 @@ async function login(options = {}) {
     updatePresence:   false,
     autoMarkDelivery: false,
     autoMarkRead:     false,
-    forceLogin:       true,
-    pageID:           0,
+    forceLogin:       false,
     selfListen:       false,
-    online:           false,
+    online:           true,
+    autoReconnect:    true,
   };
 
   // Normalize and deduplicate cookies before login
