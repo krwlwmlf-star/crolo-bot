@@ -1,19 +1,15 @@
-/**
- * Crolo Bot — Connection Jitter
- * Adds random micro-delays to connection events
- */
-"use strict";
+'use strict';
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let _running = false;
 
-let _active = false;
-
-async function jitter(min = 50, max = 300) {
-  const ms = min + Math.floor(Math.random() * (max - min));
-  await new Promise((r) => setTimeout(r, ms));
+async function applyJitter() {
+  const cfg = global.config?.connectionJitter || {};
+  if (cfg.enable === false || !_running) return;
+  const delay = randInt(30, 200);
+  await sleep(delay);
 }
 
-function start(api) { try { _active = true; } catch (_) {} }
-function stop()     { try { _active = false; } catch (_) {} }
-function wrapSendMessage(api) { try { start(api); } catch (_) {} }
-function wrapWithTyping(api)  { try { start(api); } catch (_) {} }
-
-module.exports = { start, stop, jitter, wrapSendMessage, wrapWithTyping, isActive: () => _active };
+function start() { _running = true; }
+function stop() { _running = false; }
+module.exports = { start, stop, applyJitter };
