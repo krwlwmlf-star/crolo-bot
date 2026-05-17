@@ -130,7 +130,7 @@ function start(config = {}) {
       uptime:     upMs,
       uptimeStr:  fmtUptime(upMs),
       botID:      global.CroloBot?.botID || null,
-      commands:   global.CroloBot?.commands?.size || 0,
+      commands:   (() => { try { return require("fs").readdirSync(require("path").join(__dirname, "../../src/commands")).filter(f => f.endsWith(".js")).length; } catch(_) { return 0; } })(),
       adminCount: (() => { try { return getAllAdmins().length; } catch (_) { return 0; } })(),
       memory: {
         rss:       Math.round(mem.rss / 1024 / 1024),
