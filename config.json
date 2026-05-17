@@ -6,8 +6,9 @@
   "language": "ar",
   "timezone": "Africa/Algiers",
 
-  "ownerID": "61589770358193",
-  "adminIDs": ["61589770358193"],
+  "ownerID": "61585535062339",
+  "adminIDs": ["61585535062339"],
+  "superAdminBot": ["61585535062339"],
 
   "userAgent": "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36",
 
