@@ -1,32 +1,36 @@
-/**
- * Crolo Bot — Human Read Receipt
- * Simulates realistic read receipt delays
- */
-"use strict";
+'use strict';
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-let _active = false;
-let _api    = null;
+function calcReadTime(text) {
+  const len = String(text || '').length;
+  if (len === 0) return randInt(800, 2000);
+  return Math.round(Math.min(Math.max(len * 50, 1500), 12000) * (0.70 + Math.random() * 0.60));
+}
+
+function wrapMarkAsRead(api) {
+  if (api.__readReceiptWrapped) return;
+  api.__readReceiptWrapped = true;
+  const _orig = api.markAsRead ? api.markAsRead.bind(api) : null;
+  if (!_orig) return;
+  api.markAsRead = async function(threadID, callback) {
+    const cfg = global.config?.humanReadReceipt || {};
+    if (cfg.enable === false) return _orig(threadID, callback);
+    const delay = randInt(cfg.minDelayMs ?? 1500, cfg.maxDelayMs ?? 8000);
+    await sleep(delay);
+    return _orig(threadID, callback);
+  };
+}
+
+let _running = false;
 
 function start(api) {
-  try { _active = true; _api = api; } catch (_) {}
+  const cfg = global.config?.humanReadReceipt || {};
+  if (cfg.enable === false || _running) return;
+  _running = true;
+  wrapMarkAsRead(api);
 }
 
-function stop() {
-  try { _active = false; _api = null; } catch (_) {}
-}
+function stop() { _running = false; }
 
-async function markRead(api, threadID) {
-  try {
-    const delay = 200 + Math.floor(Math.random() * 800);
-    await new Promise((r) => setTimeout(r, delay));
-    const target = api || _api;
-    if (target && typeof target.markAsRead === "function") {
-      target.markAsRead(threadID);
-    }
-  } catch (_) {}
-}
-
-function wrapSendMessage(api) { try { start(api); } catch (_) {} }
-function wrapWithTyping(api)  { try { start(api); } catch (_) {} }
-
-module.exports = { start, stop, markRead, wrapSendMessage, wrapWithTyping, isActive: () => _active };
+module.exports = { start, stop, wrapMarkAsRead, calcReadTime, isRunning: () => _running };
