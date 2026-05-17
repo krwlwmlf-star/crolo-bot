@@ -35,7 +35,7 @@ function start() {
   // Pass --experimental-sqlite so node:sqlite works in child process
   child = spawn(
     process.execPath,
-    ["--experimental-sqlite", path.join(__dirname, "Bot.js")],
+    [path.join(__dirname, "src/index.js")],
     {
       stdio: "inherit",
       env:   { ...process.env },
