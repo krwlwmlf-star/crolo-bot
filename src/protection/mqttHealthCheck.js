@@ -1,84 +1,94 @@
-/**
- * Crolo Bot — MQTT Health Check
- * Detects silent MQTT connections and notifies admins
- */
-"use strict";
+let healthTimer  = null;
+let restartCount = 0;
+let backoffMs    = 0;
 
-let _timer  = null;
-let _count  = 0;
-const rand  = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
-function getCfg() {
-  const c = global.CroloBot?.config?.mqttHealthCheck || {};
+function getConfig() {
+  const cfg = global.config?.mqttHealthCheck || {};
   return {
-    enable:   c.enable !== false,
-    silentMs: (c.silentTimeoutMinutes || 10) * 60000,
-    minMs:    (c.checkIntervalMinMinutes || 2) * 60000,
-    maxMs:    (c.checkIntervalMaxMinutes || 5) * 60000,
-    maxR:     c.maxRestarts || 5,
-    notify:   c.notifyAdmins !== false,
+    enable:             cfg.enable !== false,
+    silentTimeoutMs:    (cfg.silentTimeoutMinutes    || 10) * 60_000,
+    checkIntervalMinMs: (cfg.checkIntervalMinMinutes || 2)  * 60_000,
+    checkIntervalMaxMs: (cfg.checkIntervalMaxMinutes || 5)  * 60_000,
+    maxRestarts:        cfg.maxRestarts     || 5,
+    backoffMultiplier:  cfg.backoffMultiplier || 1.5,
+    maxBackoffMs:       (cfg.maxBackoffMinutes || 15) * 60_000,
   };
 }
 
-function markActivity() {
-  global.lastMqttActivity = Date.now();
+function onMqttActivity() {
+  global._lastMqttActivity = Date.now();
 }
 
-async function doCheck() {
-  const cfg = getCfg();
-  if (!cfg.enable || !global.CroloBot?.fcaApi) return;
-
-  const last   = global.lastMqttActivity || global.CroloBot?.startTime || Date.now();
-  const silent = Date.now() - last;
-  if (silent < cfg.silentMs) { _count = 0; return; }
-  if (_count >= cfg.maxR)   return;
-
-  _count++;
-  global.log?.warn?.("MQTT_HEALTH", `Silent for ${Math.round(silent / 60000)}min — restart attempt #${_count}`);
-
-  if (cfg.notify) {
-    try {
-      const api    = global.CroloBot?.fcaApi;
-      const config = global.CroloBot?.config || {};
-      const { getAdminIDs } = require("../../database/db");
-      const dbAdmins = getAdminIDs();
-      const cfgAdmins = [
-        ...(config.adminBot || []),
-        ...(config.superAdminBot || []),
-      ].map(String);
-      const allAdmins = [...new Set([...cfgAdmins, ...dbAdmins])];
-
-      const msg = `⚠️ [Crolo Bot] MQTT silent for ${Math.round(silent / 60000)}min. Attempting reconnect...`;
-      for (const id of allAdmins) {
-        try { api.sendMessage(msg, id); } catch (_) {}
-      }
-    } catch (_) {}
-  }
-
-  // Trigger re-login
+function notifyOwner(msg) {
   try {
-    global.CroloBot?.reLoginBot?.();
+    const api   = global.api;
+    const owner = String(global.ownerID || global.config?.ownerID || "");
+    if (!api || !owner) return;
+    api.sendMessage(msg, owner, () => {});
   } catch (_) {}
 }
 
-function start() {
-  const cfg = getCfg();
-  if (!cfg.enable) return;
+async function doHealthCheck() {
+  const cfg = getConfig();
+  if (!cfg.enable) return scheduleNext();
+  const api = global.api;
+  if (!api) return scheduleNext();
 
-  function schedule() {
-    const delay = rand(cfg.minMs, cfg.maxMs);
-    _timer = setTimeout(async () => {
-      await doCheck();
-      schedule();
-    }, delay);
+  const lastActivity = global._lastMqttActivity || Date.now();
+  const silentFor    = Date.now() - lastActivity;
+
+  if (silentFor < cfg.silentTimeoutMs) {
+    if (restartCount > 0) { restartCount = 0; backoffMs = 0; }
+    return scheduleNext();
   }
 
-  schedule();
-  global.log?.info?.("MQTT_HEALTH", "MQTT health check started");
+  if (restartCount >= cfg.maxRestarts) {
+    console.log(`[MQTT_HEALTH] Max restarts (${cfg.maxRestarts}) reached`);
+    stopHealthCheck();
+    return;
+  }
+
+  if (backoffMs === 0) backoffMs = randInt(15000, 45000);
+  await new Promise(r => setTimeout(r, backoffMs));
+
+  restartCount++;
+  const silentMin = Math.round(silentFor / 60000);
+  console.log(`[MQTT_HEALTH] No activity for ${silentMin} min — restart ${restartCount}/${cfg.maxRestarts}`);
+  notifyOwner(`⚠️ لا نشاط منذ ${silentMin} دقيقة — إعادة الاتصال (${restartCount}/${cfg.maxRestarts})`);
+
+  try {
+    const reLogin = global._reLoginBot || global.reLoginBot;
+    if (typeof reLogin === "function") {
+      global._lastMqttActivity = Date.now();
+      reLogin();
+    }
+  } catch (e) {
+    console.log(`[MQTT_HEALTH] Restart error: ${e?.message || e}`);
+  }
+
+  backoffMs = Math.min(backoffMs * cfg.backoffMultiplier, cfg.maxBackoffMs);
+  scheduleNext();
 }
 
-function stop() {
-  if (_timer) { clearTimeout(_timer); _timer = null; }
+function scheduleNext() {
+  if (healthTimer) clearTimeout(healthTimer);
+  const cfg = getConfig();
+  if (!cfg.enable) return;
+  const wait = randInt(cfg.checkIntervalMinMs, cfg.checkIntervalMaxMs);
+  healthTimer = setTimeout(doHealthCheck, wait);
 }
 
-module.exports = { start, stop, markActivity };
+function startHealthCheck() {
+  restartCount = 0; backoffMs = 0;
+  global._lastMqttActivity = Date.now();
+  console.log("[MQTT_HEALTH] Started");
+  scheduleNext();
+}
+
+function stopHealthCheck() {
+  if (healthTimer) { clearTimeout(healthTimer); healthTimer = null; }
+}
+
+module.exports = { startHealthCheck, stopHealthCheck, onMqttActivity };
