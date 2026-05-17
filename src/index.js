@@ -364,6 +364,32 @@ async function main() {
   await initDB();
   log.ok("قاعدة البيانات جاهزة");
 
+  // Start admin panel (keeps process alive on port 5000)
+  try {
+    const panel = require("./panel/server");
+    const cfg = fs.existsSync(CONFIG_PATH) ? fs.readJsonSync(CONFIG_PATH) : {};
+    panel.start(cfg);
+  } catch (e) {
+    log.warn(`Panel start error: ${e.message}`);
+  }
+
+  // Seed owner + adminIDs from config into SQLite admins table
+  try {
+    const { addAdmin, isAdmin } = require("../database/db");
+    const seedCfg = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) : {};
+    const superIDs = [...new Set([
+      ...(seedCfg.superAdminBot || []),
+      seedCfg.ownerID,
+      ...(seedCfg.adminIDs || []),
+    ].filter(Boolean).map(String))];
+    for (const id of superIDs) {
+      if (!isAdmin(id)) addAdmin(id, "config", id === String(seedCfg.ownerID) ? 3 : 2);
+    }
+    log.ok(`تم مزامنة ${superIDs.length} أدمن من الإعدادات`);
+  } catch (e) {
+    log.warn(`DB admin sync: ${e.message}`);
+  }
+
   if (!global._lockedThreads) global._lockedThreads = new Set();
   if (global._globalLock === undefined) global._globalLock = false;
   if (!global._broadcasts)    global._broadcasts    = new Map();
