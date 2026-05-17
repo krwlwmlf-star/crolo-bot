@@ -5,7 +5,7 @@ module.exports = {
     aliases: ["commands", "cmds"],
     description: "عرض جميع الأوامر المتاحة",
     usage: "help [اسم الأمر]",
-    role: 0,
+    role: 2,
   },
   async run({ api, args, threadID }) {
     const commands = global.commands;

@@ -5,7 +5,7 @@ module.exports = {
     aliases: ["botnick", "mynick"],
     description: "تغيير كنية البوت في المجموعة",
     usage: "setbotnick [الكنية] | setbotnick حدف",
-    role: 0,
+    role: 2,
   },
   async run({ api, args, threadID }) {
     const botID = api.getCurrentUserID();

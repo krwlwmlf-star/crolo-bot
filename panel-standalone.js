@@ -59,8 +59,15 @@ function startBot() {
   botProcess = spawn(
     process.execPath,
     [path.join(__dirname, "src/index.js")],
-    { stdio: "inherit", env: { ...process.env } }
+    { stdio: ["inherit", "inherit", "inherit", "ipc"], env: { ...process.env } }
   );
+
+  botProcess.on("message", (msg) => {
+    if (!msg || typeof msg !== "object") return;
+    if (msg.type === "status") {
+      global.botLiveData = { ...msg.data, receivedAt: Date.now() };
+    }
+  });
 
   botProcess.on("exit", (code, signal) => {
     const wasRunning = !!botProcess;
@@ -133,8 +140,13 @@ function getBotStatus() {
   };
 }
 
+function sendToBot(msg) {
+  try { if (botProcess && botProcess.connected) botProcess.send(msg); } catch {}
+}
+
 // Expose bot manager globally so panel server can use it
-global.botManager = { startBot, stopBot, restartBot, getBotStatus, hasCookies };
+global.botManager = { startBot, stopBot, restartBot, getBotStatus, hasCookies, sendToBot };
+global.botLiveData = null;
 
 // ── Start Panel ───────────────────────────────────────────────────────────────
 const panel = require("./src/panel/server");

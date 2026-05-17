@@ -1,7 +1,3 @@
-/**
- * Crolo Bot — Admin Panel Server
- * David-bot style: panel manages the bot process lifecycle
- */
 "use strict";
 
 const express    = require("express");
@@ -15,13 +11,14 @@ const crypto     = require("crypto");
 const ROOT         = path.join(__dirname, "../../");
 const ACCOUNT_PATH = path.join(ROOT, "account.txt");
 const CONFIG_PATH  = path.join(ROOT, "config.json");
+const SIGNAL_PATH  = path.join(ROOT, "database/data/.panel_write");
+const DB_DIR       = path.join(ROOT, "database/data");
 
 let _io     = null;
 let _server = null;
 let _logBuf = [];
 const MAX_LOG = 500;
 
-// ── Token store ───────────────────────────────────────────────────────────────
 const _tokens = new Map();
 
 function genToken() {
@@ -44,7 +41,6 @@ function authMiddleware(req, res, next) {
   res.status(401).json({ ok: false, error: "Unauthorized" });
 }
 
-// ── Log interceptor ───────────────────────────────────────────────────────────
 function interceptLogs() {
   const origLog   = console.log.bind(console);
   const origError = console.error.bind(console);
@@ -59,33 +55,31 @@ function interceptLogs() {
     if (_io) _io.emit("log", entry);
   }
 
-  console.log   = (...args) => { origLog(...args);   capture("info",  args); };
-  console.error = (...args) => { origError(...args); capture("error", args); };
-  console.warn  = (...args) => { origWarn(...args);  capture("warn",  args); };
+  console.log   = (...a) => { origLog(...a);   capture("info",  a); };
+  console.error = (...a) => { origError(...a); capture("error", a); };
+  console.warn  = (...a) => { origWarn(...a);  capture("warn",  a); };
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtUptime(ms) {
-  const s   = Math.floor(ms / 1000);
-  const d   = Math.floor(s / 86400);
-  const h   = Math.floor((s % 86400) / 3600);
-  const m   = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  const parts = [];
-  if (d)   parts.push(`${d}d`);
-  if (h)   parts.push(`${h}h`);
-  if (m)   parts.push(`${m}m`);
-  parts.push(`${sec}s`);
-  return parts.join(" ");
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const p = [];
+  if (d) p.push(`${d}d`); if (h) p.push(`${h}h`);
+  if (m) p.push(`${m}m`); p.push(`${sec}s`);
+  return p.join(" ");
 }
 
-function getBotMgr() {
-  return global.botManager || null;
+function getBotMgr()    { return global.botManager || null; }
+function getLiveData()  { return global.botLiveData || {}; }
+function isLiveRecent() { const l = getLiveData(); return !!(l.receivedAt && Date.now() - l.receivedAt < 90000); }
+
+function writeSignal() {
+  try { fs.ensureDirSync(DB_DIR); fs.writeFileSync(SIGNAL_PATH, JSON.stringify({ ts: Date.now() })); } catch {}
 }
 
-// ── Start panel ───────────────────────────────────────────────────────────────
 function start(config = {}) {
-  const port     = process.env.PORT || config?.panel?.port || 3000;
+  const port     = process.env.PORT || config?.panel?.port || 5000;
   const password = config?.panel?.password || "Crolo2026";
 
   interceptLogs();
@@ -96,58 +90,59 @@ function start(config = {}) {
   _io     = io;
   _server = server;
 
-  app.use(bodyParser.json({ limit: "2mb" }));
+  app.use(bodyParser.json({ limit: "4mb" }));
   app.use(express.static(path.join(__dirname, "public")));
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   app.post("/api/login", (req, res) => {
     const { password: pw } = req.body || {};
     let cfg = config;
-    try { cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")); } catch (_) {}
+    try { cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")); } catch {}
     const correct = cfg?.panel?.password || password;
-    if (pw !== correct) return res.status(401).json({ ok: false, error: "Wrong password" });
+    if (pw !== correct) return res.status(401).json({ ok: false, error: "كلمة المرور خاطئة" });
     res.json({ ok: true, token: genToken() });
   });
 
   app.post("/api/logout", authMiddleware, (req, res) => {
-    const tok = req.headers["x-crolo-token"] || req.query.token;
-    _tokens.delete(tok);
+    _tokens.delete(req.headers["x-crolo-token"] || req.query.token);
     res.json({ ok: true });
   });
 
   // ── Stats ─────────────────────────────────────────────────────────────────
   app.get("/api/stats", authMiddleware, (req, res) => {
-    try { require("../../database/db"); } catch (_) {}
-    const { getAllAdmins } = require("../../database/db");
+    const live    = getLiveData();
+    const recent  = isLiveRecent();
+    const botMgr  = getBotMgr();
+    const botStatus = botMgr ? botMgr.getBotStatus() : { running: false };
     const panelStart = global.CroloBot?.startTime || Date.now();
-    const upMs       = Date.now() - panelStart;
-    const mem        = process.memoryUsage();
-    const botMgr     = getBotMgr();
-    const botStatus  = botMgr ? botMgr.getBotStatus() : { running: false };
+    const upMs    = Date.now() - panelStart;
+    const mem     = process.memoryUsage();
+
+    let adminCount = 0;
+    try { const { getAllAdmins } = require("../../database/db"); adminCount = getAllAdmins().length; } catch {}
+
+    let cmdCount = 0;
+    try { cmdCount = require("fs").readdirSync(path.join(__dirname, "../../src/commands")).filter(f => f.endsWith(".js")).length; } catch {}
 
     res.json({
-      ok: true,
-      uptime:     upMs,
-      uptimeStr:  fmtUptime(upMs),
-      botID:      global.CroloBot?.botID || null,
-      commands:   (() => { try { return require("fs").readdirSync(require("path").join(__dirname, "../../src/commands")).filter(f => f.endsWith(".js")).length; } catch(_) { return 0; } })(),
-      adminCount: (() => { try { return getAllAdmins().length; } catch (_) { return 0; } })(),
-      memory: {
-        rss:       Math.round(mem.rss / 1024 / 1024),
-        heapUsed:  Math.round(mem.heapUsed / 1024 / 1024),
-        heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
-      },
-      nodeVersion:  process.version,
-      platform:     process.platform,
-      botName:      global.CroloBot?.config?.botName   || config?.botName   || "Crolo Bot",
-      prefix:       global.CroloBot?.config?.prefix    || config?.prefix    || "/",
-      adminOnly:    global.CroloBot?.config?.adminOnly?.enable !== false,
-      botProcess:   botStatus,
-      hasCookies:   botMgr ? botMgr.hasCookies() : false,
+      ok:          true,
+      uptime:      upMs,
+      uptimeStr:   fmtUptime(upMs),
+      botID:       recent ? (live.botID || null) : null,
+      botName:     live.botName || config?.botName || "Crolo Bot",
+      prefix:      live.prefix  || config?.prefix  || "/",
+      commands:    recent ? (live.commands || cmdCount) : cmdCount,
+      adminCount,
+      memory:      { rss: Math.round(mem.rss/1024/1024), heapUsed: Math.round(mem.heapUsed/1024/1024), heapTotal: Math.round(mem.heapTotal/1024/1024) },
+      nodeVersion: live.nodeVersion || process.version,
+      platform:    live.platform    || process.platform,
+      adminOnly:   true,
+      botProcess:  botStatus,
+      hasCookies:  botMgr ? botMgr.hasCookies() : false,
     });
   });
 
-  // ── Bot process control ───────────────────────────────────────────────────
+  // ── Bot controls ──────────────────────────────────────────────────────────
   app.get("/api/bot/status", authMiddleware, (req, res) => {
     const botMgr = getBotMgr();
     if (!botMgr) return res.json({ ok: true, running: false, managed: false });
@@ -156,101 +151,128 @@ function start(config = {}) {
 
   app.post("/api/bot/start", authMiddleware, (req, res) => {
     const botMgr = getBotMgr();
-    if (!botMgr) return res.json({ ok: false, error: "Bot manager not available" });
-    if (!botMgr.hasCookies()) {
-      return res.status(400).json({ ok: false, error: "No cookies found. Add cookies first." });
-    }
+    if (!botMgr) return res.json({ ok: false, error: "Bot manager غير متوفر" });
+    if (!botMgr.hasCookies()) return res.status(400).json({ ok: false, error: "لا توجد كوكيز — أضفها أولاً." });
+    botMgr.startBot !== undefined && (botMgr.startBot._autoRestart = true);
     const started = botMgr.startBot();
-    res.json({ ok: true, message: started ? "Bot starting..." : "Bot is already running" });
+    res.json({ ok: true, message: started ? "البوت يبدأ…" : "البوت شغّال بالفعل" });
   });
 
   app.post("/api/bot/stop", authMiddleware, (req, res) => {
     const botMgr = getBotMgr();
-    if (!botMgr) return res.json({ ok: false, error: "Bot manager not available" });
+    if (!botMgr) return res.json({ ok: false, error: "Bot manager غير متوفر" });
     botMgr.stopBot();
-    res.json({ ok: true, message: "Bot stopped" });
+    global.botLiveData = null;
+    res.json({ ok: true, message: "البوت أُوقف" });
   });
 
   app.post("/api/bot/restart", authMiddleware, (req, res) => {
     const botMgr = getBotMgr();
     if (botMgr) {
-      res.json({ ok: true, message: "Bot restarting..." });
-      setTimeout(() => botMgr.restartBot(), 300);
+      const status = botMgr.getBotStatus();
+      if (status.running) {
+        // In-process hot-swap (no process restart)
+        res.json({ ok: true, message: "إعادة تسجيل الدخول (hot-swap)…" });
+        setTimeout(() => botMgr.sendToBot?.({ type: "relogin" }), 200);
+      } else {
+        res.json({ ok: true, message: "البوت يبدأ…" });
+        setTimeout(() => botMgr.restartBot(), 300);
+      }
     } else {
-      // Fallback: exit process so watchdog restarts it
-      res.json({ ok: true, message: "Restarting process..." });
+      res.json({ ok: true, message: "إعادة تشغيل العملية…" });
       setTimeout(() => process.exit(0), 500);
     }
   });
 
+  app.post("/api/bot/hotswap", authMiddleware, (req, res) => {
+    const botMgr = getBotMgr();
+    if (!botMgr) return res.json({ ok: false, error: "Bot manager غير متوفر" });
+    botMgr.sendToBot?.({ type: "relogin" });
+    res.json({ ok: true, message: "hot-swap مُطلَق…" });
+  });
+
   // ── Admins ────────────────────────────────────────────────────────────────
   app.get("/api/admins", authMiddleware, (req, res) => {
-    const { getAllAdmins } = require("../../database/db");
-    res.json({ ok: true, admins: getAllAdmins() });
+    try {
+      const { getAllAdmins } = require("../../database/db");
+      res.json({ ok: true, admins: getAllAdmins() });
+    } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
   });
 
   app.post("/api/admins/add", authMiddleware, (req, res) => {
     const { userID, role } = req.body || {};
     if (!userID || !/^\d+$/.test(String(userID)))
-      return res.status(400).json({ ok: false, error: "Invalid userID" });
+      return res.status(400).json({ ok: false, error: "userID غير صالح" });
     try {
       const { addAdmin, isAdmin } = require("../../database/db");
       if (isAdmin(String(userID)))
-        return res.status(400).json({ ok: false, error: "Already an admin" });
+        return res.status(400).json({ ok: false, error: "هذا المستخدم أدمن بالفعل" });
       addAdmin(String(userID), "panel", role || 2);
-      if (global.CroloBot?.config) {
-        if (!Array.isArray(global.CroloBot.config.adminBot)) global.CroloBot.config.adminBot = [];
-        if (!global.CroloBot.config.adminBot.map(String).includes(String(userID)))
-          global.CroloBot.config.adminBot.push(String(userID));
-      }
-      res.json({ ok: true, message: `User ${userID} added as admin` });
-    } catch (err) {
-      res.status(500).json({ ok: false, error: err.message });
-    }
+
+      // Persist to config.json
+      try {
+        const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+        if (!Array.isArray(cfg.adminIDs)) cfg.adminIDs = [];
+        if (!cfg.adminIDs.map(String).includes(String(userID))) {
+          cfg.adminIDs.push(String(userID));
+          fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+        }
+      } catch {}
+
+      // Notify bot process
+      getBotMgr()?.sendToBot?.({ type: "reload_admins" });
+
+      res.json({ ok: true, message: `تمت إضافة ${userID} كأدمن` });
+    } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
   });
 
   app.post("/api/admins/remove", authMiddleware, (req, res) => {
     const { userID } = req.body || {};
-    if (!userID) return res.status(400).json({ ok: false, error: "Missing userID" });
-    const ownerID = String(global.CroloBot?.config?.ownerID || "");
-    if (String(userID) === ownerID)
-      return res.status(400).json({ ok: false, error: "Cannot remove owner" });
+    if (!userID) return res.status(400).json({ ok: false, error: "userID مطلوب" });
+    try {
+      const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+      if (String(userID) === String(cfg.ownerID || ""))
+        return res.status(400).json({ ok: false, error: "لا يمكن حذف المالك" });
+    } catch {}
     try {
       const { removeAdmin } = require("../../database/db");
       removeAdmin(String(userID));
-      if (global.CroloBot?.config?.adminBot)
-        global.CroloBot.config.adminBot = global.CroloBot.config.adminBot.filter(
-          (id) => String(id) !== String(userID)
-        );
-      res.json({ ok: true, message: `User ${userID} removed from admins` });
-    } catch (err) {
-      res.status(500).json({ ok: false, error: err.message });
-    }
+
+      // Remove from config.json
+      try {
+        const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+        if (Array.isArray(cfg.adminIDs)) {
+          cfg.adminIDs = cfg.adminIDs.filter(id => String(id) !== String(userID));
+          fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+        }
+      } catch {}
+
+      // Notify bot process
+      getBotMgr()?.sendToBot?.({ type: "reload_admins" });
+
+      res.json({ ok: true, message: `تمت إزالة ${userID} من الأدمن` });
+    } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
   });
 
   // ── Cookies ───────────────────────────────────────────────────────────────
   app.get("/api/cookies", authMiddleware, (req, res) => {
     try {
       let raw = "";
-      try { raw = fs.readFileSync(ACCOUNT_PATH, "utf8").trim(); } catch (_) {}
-      const { getAllCookies } = require("../../database/db");
-      const history = (() => { try { return getAllCookies().slice(0, 10); } catch (_) { return []; } })();
+      try { raw = fs.readFileSync(ACCOUNT_PATH, "utf8").trim(); } catch {}
+      const history = (() => { try { return require("../../database/db").getAllCookies().slice(0, 10); } catch { return []; } })();
       res.json({
         ok: true,
-        current:    raw ? raw.substring(0, 120) + "..." : "(empty — no cookies set)",
+        current:    raw ? raw.substring(0, 120) + "…" : "(فارغ — لا كوكيز)",
         hasCookies: raw.length > 10,
         history,
       });
-    } catch (err) {
-      res.status(500).json({ ok: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
   });
 
   app.post("/api/cookies/update", authMiddleware, (req, res) => {
     const { cookies } = req.body || {};
     if (!cookies || typeof cookies !== "string")
-      return res.status(400).json({ ok: false, error: "Missing or invalid cookies" });
-
+      return res.status(400).json({ ok: false, error: "كوكيز مفقودة أو غير صالحة" });
     try {
       const { parseCookieInput, hasMandatory } = require("../utils/cookieParser");
       let parsed, isToken = false;
@@ -263,35 +285,26 @@ function start(config = {}) {
       }
 
       if (isToken) {
-        // Token — save as-is for getFbstateFromToken to handle on next start
+        writeSignal();
         fs.writeFileSync(ACCOUNT_PATH, cookies.trim(), "utf8");
-        global._dashCookieWrite = true;
-        setTimeout(() => { global._dashCookieWrite = false; }, 6000);
-        console.log("[PANEL] Token saved — will convert on next bot start");
+        try { require("../../database/db").saveCookie(cookies.trim(), "token"); } catch {}
+        console.log("[PANEL] Token saved");
         return res.json({ ok: true, message: "✓ التوكن محفوظ. اضغط Start Bot لتشغيل البوت." });
       }
 
       if (!parsed || !parsed.length)
-        return res.status(400).json({ ok: false, error: "لم يتم التعرف على كوكيز صالحة في المدخل." });
-
+        return res.status(400).json({ ok: false, error: "لم يُتعرَّف على كوكيز صالحة." });
       if (!hasMandatory(parsed))
-        return res.status(400).json({ ok: false, error: "الكوكيز تبدو غير صالحة — c_user أو xs مفقودان." });
+        return res.status(400).json({ ok: false, error: "الكوكيز غير صالحة — c_user أو xs مفقودان." });
 
       const json = JSON.stringify(parsed, null, 2);
-      global._dashCookieWrite = true;
+      writeSignal();
       fs.writeFileSync(ACCOUNT_PATH, json, "utf8");
-      setTimeout(() => { global._dashCookieWrite = false; }, 6000);
-
-      try {
-        const { saveCookie } = require("../../database/db");
-        saveCookie(json, "main");
-      } catch (_) {}
+      try { require("../../database/db").saveCookie(json, "main"); } catch {}
 
       console.log(`[PANEL] Cookies updated (${parsed.length} cookies)`);
       res.json({ ok: true, message: `✓ ${parsed.length} كوكي محفوظة. اضغط Start Bot أو Restart للتطبيق.` });
-    } catch (err) {
-      res.status(500).json({ ok: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
   });
 
   // ── Config ────────────────────────────────────────────────────────────────
@@ -299,41 +312,27 @@ function start(config = {}) {
     try {
       const cfg  = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
       const safe = { ...cfg };
-      if (safe.facebookAccount) delete safe.facebookAccount.password;
+      delete safe.facebookAccount;
       res.json({ ok: true, config: safe });
-    } catch (err) {
-      res.status(500).json({ ok: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
   });
 
   app.post("/api/config/update", authMiddleware, (req, res) => {
     const { key, value } = req.body || {};
-    if (!key) return res.status(400).json({ ok: false, error: "Missing key" });
+    if (!key) return res.status(400).json({ ok: false, error: "key مطلوب" });
     const allowed = ["botName", "prefix", "timezone", "adminOnly", "stealth", "rateLimit", "panel"];
     if (!allowed.includes(key.split(".")[0]))
-      return res.status(400).json({ ok: false, error: `Key '${key.split(".")[0]}' is not editable via panel` });
+      return res.status(400).json({ ok: false, error: `المفتاح '${key.split(".")[0]}' غير قابل للتعديل` });
     try {
       const cfg  = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
       const keys = key.split(".");
       let obj    = cfg;
-      for (let i = 0; i < keys.length - 1; i++) {
-        if (!obj[keys[i]]) obj[keys[i]] = {};
-        obj = obj[keys[i]];
-      }
+      for (let i = 0; i < keys.length - 1; i++) { if (!obj[keys[i]]) obj[keys[i]] = {}; obj = obj[keys[i]]; }
       obj[keys[keys.length - 1]] = value;
-      fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), "utf8");
-      if (global.CroloBot?.config) {
-        let rObj = global.CroloBot.config;
-        for (let i = 0; i < keys.length - 1; i++) {
-          if (!rObj[keys[i]]) rObj[keys[i]] = {};
-          rObj = rObj[keys[i]];
-        }
-        rObj[keys[keys.length - 1]] = value;
-      }
+      fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+      getBotMgr()?.sendToBot?.({ type: "reload_admins" });
       res.json({ ok: true, message: `Config '${key}' updated` });
-    } catch (err) {
-      res.status(500).json({ ok: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ ok: false, error: err.message }); }
   });
 
   // ── Logs ──────────────────────────────────────────────────────────────────

@@ -31,7 +31,11 @@ global.log = log;
 
 // ─── Permissions ──────────────────────────────────────────────────────────────
 const isOwner = id => String(id) === String(global.ownerID);
-const isAdmin = id => isOwner(id) || (global.config?.adminIDs || []).map(String).includes(String(id));
+const isAdmin = id => {
+  if (isOwner(id)) return true;
+  if ((global.config?.adminIDs || []).map(String).includes(String(id))) return true;
+  try { return require("../database/db").isAdmin(String(id)); } catch { return false; }
+};
 global.isOwner = isOwner;
 global.isAdmin = isAdmin;
 
@@ -282,6 +286,29 @@ async function startBot() {
       log.ok("🛡️ جميع أنظمة الحماية نشطة");
       try { require("./utils/autoBackup").start(); } catch (_) {}
 
+      // IPC — broadcast status to panel
+      if (process.send) {
+        const broadcastStatus = () => {
+          try {
+            process.send({
+              type: "status",
+              data: {
+                running:    true,
+                botID:      api.getCurrentUserID(),
+                botName:    global.botName || "Crolo Bot",
+                prefix:     global.commandPrefix || "/",
+                loginAt:    Date.now(),
+                commands:   global.commands?.size || 0,
+                nodeVersion: process.version,
+                platform:    process.platform,
+              },
+            });
+          } catch {}
+        };
+        broadcastStatus();
+        setInterval(broadcastStatus, 20000);
+      }
+
       setupCronJobs(api);
       _loginLock = false;
 
@@ -400,11 +427,21 @@ async function main() {
   let _watchMtime = 0;
   let _watchTimer = null;
 
+  const SIGNAL_PATH = path.join(__dirname, "../database/data/.panel_write");
+
   fs.watch(ACCOUNT_PATH, () => {
     if (_watchTimer) return;
     _watchTimer = setTimeout(async () => {
       _watchTimer = null;
-      if (global._selfWrite || global._dashCookieWrite || _loginLock) return;
+      if (global._selfWrite || _loginLock) return;
+      // Check signal file (panel wrote this file — don't auto hot-swap)
+      try {
+        if (fs.existsSync(SIGNAL_PATH)) {
+          const sig = JSON.parse(fs.readFileSync(SIGNAL_PATH, "utf8") || "{}");
+          if (Date.now() - (sig.ts || 0) < 30000) { fs.removeSync(SIGNAL_PATH); return; }
+          fs.removeSync(SIGNAL_PATH);
+        }
+      } catch {}
       try {
         const stat = fs.statSync(ACCOUNT_PATH);
         if (stat.mtimeMs <= _watchMtime + 500) return;
@@ -416,6 +453,26 @@ async function main() {
       setTimeout(() => startBot(), 3000);
     }, 5000);
   });
+
+  // IPC from panel
+  if (process.send) {
+    process.on("message", async (msg) => {
+      if (!msg || typeof msg !== "object") return;
+      if (msg.type === "relogin") {
+        log.warn("🔄 IPC: إعادة تسجيل الدخول (طلب الواجهة)…");
+        _loginLock = false;
+        setTimeout(() => startBot(), 500);
+      }
+      if (msg.type === "reload_admins") {
+        try {
+          const fresh = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+          if (global.config) global.config.adminIDs = fresh.adminIDs || [];
+          log.info("♻ قائمة الأدمن محدَّثة");
+        } catch {}
+      }
+    });
+    process.on("disconnect", () => { log.warn("IPC انقطع — الإغلاق"); process.exit(0); });
+  }
 
   await startBot();
 }

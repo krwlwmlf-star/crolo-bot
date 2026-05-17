@@ -3,8 +3,10 @@
 const chalk  = require("chalk");
 const moment = require("moment-timezone");
 const { getOrCreateUser, getOrCreateThread, logCommand } = require("../utils/database");
+const threadsData = require("../utils/threadsData");
 
-// ─── Anti-Spam ────────────────────────────────────────────────────────────────
+if (!global._onReply) global._onReply = new Map();
+
 const _spamMap   = new Map();
 const _warned    = new Set();
 const SPAM_LIMIT = 8;
@@ -12,25 +14,20 @@ const SPAM_WIN   = 10000;
 
 function checkSpam(senderID) {
   const now = Date.now();
-  let entry = _spamMap.get(senderID);
-  if (!entry || now > entry.resetAt) {
-    entry = { count: 0, resetAt: now + SPAM_WIN };
-    _warned.delete(senderID);
-  }
-  entry.count++;
-  _spamMap.set(senderID, entry);
-  return { exceeded: entry.count > SPAM_LIMIT, warned: _warned.has(senderID), setWarn: () => _warned.add(senderID) };
+  let e = _spamMap.get(senderID);
+  if (!e || now > e.resetAt) { e = { count: 0, resetAt: now + SPAM_WIN }; _warned.delete(senderID); }
+  e.count++;
+  _spamMap.set(senderID, e);
+  return { exceeded: e.count > SPAM_LIMIT, warned: _warned.has(senderID), setWarn: () => _warned.add(senderID) };
 }
 
-// ─── Name Cache ───────────────────────────────────────────────────────────────
 const _nc = { u: {}, t: {} };
 global._nameCache = _nc;
 
 async function resolveUser(api, uid) {
   if (_nc.u[uid]) return _nc.u[uid];
   try {
-    const info = await new Promise((res, rej) =>
-      api.getUserInfo(uid, (e, d) => e ? rej(e) : res(d || {})));
+    const info = await new Promise((res, rej) => api.getUserInfo(uid, (e, d) => e ? rej(e) : res(d || {})));
     _nc.u[uid] = info[uid]?.name || String(uid);
   } catch { _nc.u[uid] = String(uid); }
   return _nc.u[uid];
@@ -39,40 +36,35 @@ async function resolveUser(api, uid) {
 async function resolveThread(api, tid) {
   if (_nc.t[tid]) return _nc.t[tid];
   try {
-    const info = await new Promise((res, rej) =>
-      api.getThreadInfo(tid, (e, d) => e ? rej(e) : res(d || {})));
+    const info = await new Promise((res, rej) => api.getThreadInfo(tid, (e, d) => e ? rej(e) : res(d || {})));
     _nc.t[tid] = info?.threadName || String(tid);
   } catch { _nc.t[tid] = String(tid); }
   return _nc.t[tid];
 }
 
-// ─── Logger ───────────────────────────────────────────────────────────────────
 const ts = () => moment().tz(global.config?.timezone || "Africa/Algiers").format("HH:mm:ss");
 
 function logMsg(senderName, threadName, body, isGroup, isCmd) {
   const icon  = isGroup ? chalk.blue("👥") : chalk.green("💬");
   const who   = chalk.bold.cyan(senderName);
   const where = isGroup ? chalk.bold.blue(`[${threadName}]`) : chalk.bold.green("DM");
-  const prefix = isCmd ? chalk.magenta("⚡CMD ") : "";
-  console.log(`${chalk.gray(ts())} ${icon} ${where} ${chalk.gray("←")} ${who}: ${prefix}${chalk.white(String(body||"").slice(0,120))}`);
+  const pfx   = isCmd ? chalk.magenta("⚡CMD ") : "";
+  console.log(`${chalk.gray(ts())} ${icon} ${where} ${chalk.gray("←")} ${who}: ${pfx}${chalk.white(String(body||"").slice(0,120))}`);
 }
 
 function logEvent(type, threadName) {
   console.log(`${chalk.gray(ts())} ${chalk.yellow("⚡")} ${chalk.yellow(type)} @ ${chalk.cyan(threadName)}`);
 }
 
-// ─── Main Handler ─────────────────────────────────────────────────────────────
 module.exports = async function handlerEvents(api, event, commands) {
   if (!event) return;
-
   commands = commands || global.commands;
   const prefix = global.commandPrefix || "/";
   const config = global.config || {};
 
   global._lastActivity     = Date.now();
   global._lastMqttActivity = Date.now();
-
-  try { require("../protection/mqttHealthCheck").onMqttActivity(); } catch (_) {}
+  try { require("../protection/mqttHealthCheck").onMqttActivity(); } catch {}
 
   // ══ MESSAGE ══════════════════════════════════════════════════════════════════
   if (event.type === "message" || event.type === "message_reply") {
@@ -96,9 +88,34 @@ module.exports = async function handlerEvents(api, event, commands) {
       isGroup ? getOrCreateThread(threadID, threadName).catch(() => {}) : Promise.resolve(),
     ]);
 
+    // ── onReply dispatch ─────────────────────────────────────────────────────
+    const repMID = event.messageReply?.messageID;
+    if (repMID && global._onReply.has(repMID)) {
+      const replyData = global._onReply.get(repMID);
+      // Only allow original author or admin to trigger onReply
+      if (String(senderID) === String(replyData.author) || _isAdmin) {
+        global._onReply.delete(repMID);
+        const replyCmd = commands.get(replyData.commandName);
+        const replyFn  = replyCmd?.onReply;
+        if (typeof replyFn === "function") {
+          const msgObj = buildMessage(api, threadID, messageID);
+          try {
+            await replyFn({
+              api, event, args: body.trim().split(/\s+/),
+              Reply: replyData, body, threadID, senderID,
+              isGroup, isOwner: _isOwner, isAdmin: _isAdmin,
+              senderName, threadName, prefix, config, commands,
+              threadsData, message: msgObj,
+              role: _isOwner ? 3 : _isAdmin ? 2 : 1,
+            });
+          } catch (e) { console.error(`onReply(${replyData.commandName}):`, e.message); }
+        }
+        return;
+      }
+    }
+
     if (!isCmd) return;
 
-    // Lock check
     const _locked = global._lockedThreads || new Set();
     if ((global._globalLock || _locked.has(threadID)) && !_isAdmin) return;
 
@@ -107,7 +124,6 @@ module.exports = async function handlerEvents(api, event, commands) {
     const cmd     = commands.get(cmdName);
     if (!cmd) return;
 
-    // Permission checks
     if (cmd.config.ownerOnly && !_isOwner)
       return api.sendMessage("❌ هذا الأمر للمالك فقط.", threadID);
 
@@ -117,16 +133,13 @@ module.exports = async function handlerEvents(api, event, commands) {
       ? (cmdRole === "owner" ? 3 : cmdRole === "admin" ? 2 : 0)
       : Number(cmdRole);
 
-    if (numRole >= 3 && !_isOwner)
-      return api.sendMessage("❌ هذا الأمر للمالك فقط.", threadID);
-    if (numRole >= 2 && !_isAdmin)
-      return api.sendMessage("❌ هذا الأمر لأدمن البوت فقط.", threadID);
+    if (numRole >= 3 && !_isOwner) return api.sendMessage("❌ هذا الأمر للمالك فقط.", threadID);
+    if (numRole >= 2 && !_isAdmin) return;  // صامت — لا رد للعامة
 
-    // Anti-spam
     if (!_isAdmin) {
       const spam = checkSpam(senderID);
       if (spam.exceeded) {
-        if (!spam.warned) { spam.setWarn(); api.sendMessage("⚠️ أنت تستخدم الأوامر بسرعة كبيرة، انتظر قليلاً!", threadID); }
+        if (!spam.warned) { spam.setWarn(); api.sendMessage("⚠️ تستخدم الأوامر بسرعة كبيرة!", threadID); }
         return;
       }
     }
@@ -137,6 +150,8 @@ module.exports = async function handlerEvents(api, event, commands) {
     const runFn = cmd.run || cmd.onStart;
     if (typeof runFn !== "function") return;
 
+    const msgObj = buildMessage(api, threadID, messageID, commands, cmd.config.name);
+
     try {
       await runFn({
         api, event, args,
@@ -144,18 +159,14 @@ module.exports = async function handlerEvents(api, event, commands) {
         isGroup, isOwner: _isOwner, isAdmin: _isAdmin,
         senderName, threadName,
         prefix, config, commands,
-        // Backward compat (old onStart format)
-        message: {
-          reply: (msg, cb) => api.sendMessage(msg, threadID, cb),
-          send:  (msg, tid, cb) => api.sendMessage(msg, tid || threadID, cb),
-          react: (emoji, mid, cb) => { try { api.setMessageReaction(emoji, mid || messageID, cb, true); } catch (_) {} },
-          unsend:(mid, cb) => { try { api.unsendMessage(mid || messageID, cb); } catch (_) {} },
-        },
+        threadsData,
+        commandName: cmd.config.name,
+        message: msgObj,
         role: _isOwner ? 3 : _isAdmin ? 2 : 1,
       });
     } catch (e) {
-      console.error(`${chalk.red("✘")} ${cmdName} error: ${e.message}`);
-      try { api.sendMessage(`❌ خطأ في الأمر \`${cmdName}\`: ${e.message}`, threadID); } catch (_) {}
+      console.error(`${chalk.red("✘")} ${cmdName}: ${e.message}`);
+      try { api.sendMessage(`❌ خطأ: ${e.message}`, threadID); } catch {}
     }
 
   // ══ GROUP EVENT ══════════════════════════════════════════════════════════════
@@ -164,16 +175,13 @@ module.exports = async function handlerEvents(api, event, commands) {
     const threadName = await resolveThread(api, threadID).catch(() => threadID);
     logEvent(logMessageType || "group_event", threadName);
 
-    // Dispatch handleEvent to commands that need it (e.g. كنيات)
     if (commands) {
       for (const [, cmd] of commands) {
-        if (typeof cmd.handleEvent === "function") {
-          try { await cmd.handleEvent({ api, event, threadID, logMessageType, logMessageData }); }
-          catch (_) {}
-        }
-        if (typeof cmd.onEvent === "function") {
-          try { await cmd.onEvent({ api, event, threadID, logMessageType, logMessageData }); }
-          catch (_) {}
+        for (const fn of [cmd.handleEvent, cmd.onEvent]) {
+          if (typeof fn === "function") {
+            try { await fn({ api, event, threadID, logMessageType, logMessageData, threadsData }); }
+            catch {}
+          }
         }
       }
     }
@@ -200,16 +208,36 @@ module.exports = async function handlerEvents(api, event, commands) {
       }
     }
 
-  // ══ TYPING ═══════════════════════════════════════════════════════════════════
-  } else if (event.type === "typ") {
-    // silent
-
-  // ══ REACTION ═════════════════════════════════════════════════════════════════
   } else if (event.type === "message_reaction") {
     global._lastActivity = Date.now();
-
-  // ══ READ RECEIPT ══════════════════════════════════════════════════════════════
   } else if (event.type === "read_receipt") {
     global._lastActivity = Date.now();
   }
 };
+
+function buildMessage(api, threadID, messageID, commands, cmdName) {
+  return {
+    reply: (msg, cb) => {
+      if (typeof msg === "object" && msg !== null && !Buffer.isBuffer(msg)) {
+        return api.sendMessage(msg, threadID, (err, info) => {
+          if (cb) cb(err, info);
+          if (!err && info && cmdName && commands) {
+            if (msg._onReplyFn) {
+              global._onReply.set(info.messageID, { commandName: cmdName, messageID: info.messageID, author: msg._author || null, ...(msg._replyData || {}) });
+            }
+          }
+        });
+      }
+      return api.sendMessage(msg, threadID, cb);
+    },
+    send:  (msg, tid, cb) => api.sendMessage(msg, tid || threadID, cb),
+    react: (emoji, mid, cb) => { try { api.setMessageReaction(emoji, mid || messageID, cb, true); } catch {} },
+    unsend:(mid, cb) => { try { api.unsendMessage(mid || messageID, cb); } catch {} },
+    // Helper to register reply handler
+    addReply: (info, data) => {
+      if (info?.messageID && cmdName) {
+        global._onReply.set(info.messageID, { commandName: cmdName, messageID: info.messageID, ...data });
+      }
+    },
+  };
+}
