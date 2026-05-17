@@ -1,24 +1,21 @@
-/**
- * Crolo Bot — Reaction Delay
- * Adds human-like delay before sending reactions
- */
-"use strict";
+'use strict';
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let _running = false;
 
-let _active = false;
-
-async function delayedReact(api, emoji, messageID, threadID) {
-  try {
-    const delay = 400 + Math.floor(Math.random() * 900);
-    await new Promise((r) => setTimeout(r, delay));
-    if (typeof api?.setMessageReaction === "function") {
-      api.setMessageReaction(emoji, messageID, () => {}, true);
-    }
-  } catch (_) {}
+function wrapSetReaction(api) {
+  if (api.__reactionDelayWrapped) return;
+  api.__reactionDelayWrapped = true;
+  const _orig = api.setMessageReaction ? api.setMessageReaction.bind(api) : null;
+  if (!_orig) return;
+  api.setMessageReaction = async function(reaction, messageID, callback, forceCustom) {
+    const cfg = global.config?.reactionDelay || {};
+    if (cfg.enable === false) return _orig(reaction, messageID, callback, forceCustom);
+    await sleep(randInt(500, 4000));
+    return _orig(reaction, messageID, callback, forceCustom);
+  };
 }
 
-function start(api) { try { _active = true; } catch (_) {} }
-function stop()     { try { _active = false; } catch (_) {} }
-function wrapSendMessage(api) { try { start(api); } catch (_) {} }
-function wrapWithTyping(api)  { try { start(api); } catch (_) {} }
-
-module.exports = { start, stop, delayedReact, wrapSendMessage, wrapWithTyping, isActive: () => _active };
+function start(api) { if (_running) return; _running = true; wrapSetReaction(api); }
+function stop() { _running = false; }
+module.exports = { start, stop };
