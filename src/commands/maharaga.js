@@ -1,7 +1,10 @@
 "use strict";
 
-// threadID → { timer, minMs, maxMs }
+// threadID → { timer, minMs, maxMs, customMsg }
 const activeEngines = new Map();
+
+// threadID → custom message text (set before on)
+const customMessages = new Map();
 
 // Invisible / silent characters — appears as empty message
 const SILENT_CHARS = [
@@ -14,7 +17,6 @@ const SILENT_CHARS = [
 ];
 
 function silentPayload() {
-  // Random combo of invisible chars → looks empty on screen
   const len = Math.floor(Math.random() * 4) + 1;
   let s = "";
   for (let i = 0; i < len; i++) {
@@ -37,7 +39,11 @@ function startEngine(api, threadID, minMs, maxMs) {
     if (!activeEngines.has(threadID)) return;
     const current = activeEngines.get(threadID);
 
-    api.sendMessage(silentPayload(), threadID, () => {});
+    const msg = customMessages.has(threadID)
+      ? customMessages.get(threadID)
+      : silentPayload();
+
+    api.sendMessage(msg, threadID, () => {});
 
     const delay = randBetween(current.minMs, current.maxMs);
     current.timer = setTimeout(tick, delay);
@@ -58,16 +64,18 @@ module.exports = {
   config: {
     name:        "ماهوراغا",
     aliases:     ["maharaga", "silent", "صامت"],
-    version:     "1.0",
+    version:     "1.1",
     author:      "Crolo",
     role:        2,
     category:    "tools",
-    description: "محرك رسائل صامتة — يرسل رسائل غير مرئية بلا توقف حتى الإيقاف",
+    description: "محرك رسائل صامتة — يرسل رسائل غير مرئية (أو مخصصة) بلا توقف حتى الإيقاف",
     guide:       {
       en: [
-        "{pn} on          — تشغيل المحرك",
-        "{pn} stop        — إيقاف المحرك",
+        "{pn} on               — تشغيل المحرك",
+        "{pn} stop             — إيقاف المحرك",
         "{pn} time {min} {max} — ضبط التوقيت (بالثواني)",
+        "{pn} change [نص]      — تعيين رسالة مخصصة قبل التشغيل",
+        "{pn} change clear     — إزالة الرسالة المخصصة والعودة للصامتة",
       ].join("\n"),
     },
   },
@@ -79,22 +87,25 @@ module.exports = {
     if (sub === "on" || sub === "تشغيل") {
       if (activeEngines.has(threadID)) {
         const st = activeEngines.get(threadID);
+        const hasCustom = customMessages.has(threadID);
         return message.reply(
           `⚙️ المحرك يعمل بالفعل.\n` +
           `⏱ التوقيت: ${st.minMs / 1000}ث — ${st.maxMs / 1000}ث\n` +
+          `📝 الرسالة: ${hasCustom ? `"${customMessages.get(threadID)}"` : "صامتة (غير مرئية)"}\n` +
           `لإيقافه: /ماهوراغا stop`
         );
       }
 
       const minMs = 1000;
       const maxMs = 3000;
+      const hasCustom = customMessages.has(threadID);
       startEngine(api, threadID, minMs, maxMs);
 
       return message.reply(
-        `✅ تم تشغيل محرك الرسائل الصامتة\n` +
+        `✅ تم تشغيل المحرك\n` +
         `⏱ التوقيت: ${minMs / 1000}ث — ${maxMs / 1000}ث (افتراضي)\n` +
-        `لإيقافه: /ماهوراغا stop\n` +
-        `لضبط التوقيت: /ماهوراغا time 1 5`
+        `📝 الرسالة: ${hasCustom ? `"${customMessages.get(threadID)}"` : "صامتة (غير مرئية)"}\n` +
+        `لإيقافه: /ماهوراغا stop`
       );
     }
 
@@ -103,8 +114,41 @@ module.exports = {
       const stopped = stopEngine(threadID);
       return message.reply(
         stopped
-          ? "⛔ تم إيقاف محرك الرسائل الصامتة."
+          ? "⛔ تم إيقاف المحرك."
           : "⚠️ المحرك غير نشط حالياً."
+      );
+    }
+
+    // ── CHANGE ────────────────────────────────────────────────────────────────
+    if (sub === "change" || sub === "تغيير") {
+      const rest = args.slice(1).join(" ").trim();
+
+      if (!rest) {
+        const cur = customMessages.get(threadID);
+        return message.reply(
+          `📝 الرسالة المخصصة الحالية:\n` +
+          (cur ? `"${cur}"\n\nلتغييرها: /ماهوراغا change [النص]\nلحذفها: /ماهوراغا change clear`
+               : `غير محددة — يُرسل رسائل صامتة.\n\nلتعيين رسالة: /ماهوراغا change [النص]`)
+        );
+      }
+
+      if (rest.toLowerCase() === "clear" || rest === "حذف" || rest === "مسح") {
+        customMessages.delete(threadID);
+        return message.reply(
+          `🗑️ تم حذف الرسالة المخصصة.\n` +
+          `المحرك سيعود لإرسال رسائل صامتة عند التشغيل.`
+        );
+      }
+
+      customMessages.set(threadID, rest);
+
+      // If engine is already running, update it live
+      const isActive = activeEngines.has(threadID);
+      return message.reply(
+        `✅ تم تعيين الرسالة المخصصة:\n"${rest}"\n\n` +
+        (isActive
+          ? `المحرك يعمل وسيستخدمها فوراً.`
+          : `شغّل المحرك بـ: /ماهوراغا on`)
       );
     }
 
@@ -125,7 +169,6 @@ module.exports = {
       const maxMs = Math.round(rawMax * 1000);
 
       if (activeEngines.has(threadID)) {
-        // Update timing while running
         const st = activeEngines.get(threadID);
         st.minMs = minMs;
         st.maxMs = maxMs;
@@ -136,7 +179,6 @@ module.exports = {
           `(المحرك لا يزال يعمل)`
         );
       } else {
-        // Start with new timing
         startEngine(api, threadID, minMs, maxMs);
         return message.reply(
           `✅ تم تشغيل المحرك بتوقيت مخصص:\n` +
@@ -150,15 +192,21 @@ module.exports = {
     // ── STATUS / HELP ─────────────────────────────────────────────────────────
     const isActive = activeEngines.has(threadID);
     const st       = isActive ? activeEngines.get(threadID) : null;
+    const hasCustom = customMessages.has(threadID);
 
     return message.reply(
       `🔇 محرك الرسائل الصامتة\n` +
-      `الحالة: ${isActive ? `✅ نشط (${st.minMs / 1000}ث — ${st.maxMs / 1000}ث)` : "⛔ متوقف"}\n\n` +
+      `الحالة: ${isActive ? `✅ نشط (${st.minMs / 1000}ث — ${st.maxMs / 1000}ث)` : "⛔ متوقف"}\n` +
+      `الرسالة: ${hasCustom ? `"${customMessages.get(threadID)}"` : "صامتة (غير مرئية)"}\n\n` +
       `الأوامر:\n` +
       `• /ماهوراغا on — تشغيل\n` +
       `• /ماهوراغا stop — إيقاف\n` +
+      `• /ماهوراغا change [نص] — تعيين رسالة مخصصة\n` +
+      `• /ماهوراغا change clear — حذف الرسالة المخصصة\n` +
       `• /ماهوراغا time {أدنى} {أقصى} — ضبط التوقيت بالثواني\n\n` +
-      `مثال: /ماهوراغا time 0.5 2`
+      `مثال:\n` +
+      `/ماهوراغا change مرحبا\n` +
+      `/ماهوراغا on`
     );
   },
 };
