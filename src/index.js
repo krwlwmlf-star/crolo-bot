@@ -286,7 +286,25 @@ async function startBot() {
       log.ok("🛡️ جميع أنظمة الحماية نشطة");
       try { require("./utils/autoBackup").start(); } catch (_) {}
 
-      // IPC — broadcast status to panel
+      // Set live data for panel (same-process access)
+      const _setLiveData = () => {
+        global.botLiveData = {
+          running:     true,
+          botID:       api.getCurrentUserID(),
+          botName:     global.botName || "Crolo Bot",
+          prefix:      global.commandPrefix || "/",
+          loginAt:     global.botLiveData?.loginAt || Date.now(),
+          commands:    global.commands?.size || 0,
+          nodeVersion: process.version,
+          platform:    process.platform,
+          receivedAt:  Date.now(),
+        };
+      };
+      _setLiveData();
+      if (global._liveDataTimer) clearInterval(global._liveDataTimer);
+      global._liveDataTimer = setInterval(_setLiveData, 15000);
+
+      // IPC — broadcast status to parent watchdog if running as child
       if (process.send) {
         const broadcastStatus = () => {
           try {
@@ -448,6 +466,43 @@ async function main() {
   log.ok(`تم تحميل ${chalk.bold(commands.size)} أمر`);
 
   if (!fs.existsSync(ACCOUNT_PATH)) fs.writeFileSync(ACCOUNT_PATH, "", "utf8");
+
+  // ── Bot Manager — للواجهة ───────────────────────────────────────────────────
+  global.botManager = {
+    getBotStatus: () => ({
+      running: !!(global.api && global.botLiveData?.running),
+      botID:   global.CroloBot?.botID || global.botLiveData?.botID || null,
+      loginAt: global.botLiveData?.loginAt || null,
+    }),
+    hasCookies: () => {
+      try { return fs.readFileSync(ACCOUNT_PATH, "utf8").trim().length > 10; }
+      catch { return false; }
+    },
+    startBot: () => {
+      if (global.api) return false;
+      setTimeout(() => startBot(), 200);
+      return true;
+    },
+    stopBot: () => {
+      if (global._liveDataTimer) { clearInterval(global._liveDataTimer); global._liveDataTimer = null; }
+      stopListening();
+      global.api        = null;
+      global.botLiveData = { running: false, receivedAt: Date.now() };
+    },
+    restartBot: () => {
+      if (global._liveDataTimer) { clearInterval(global._liveDataTimer); global._liveDataTimer = null; }
+      stopListening();
+      global.api = null;
+      setTimeout(() => startBot(), 1000);
+    },
+    sendToBot: (msg) => {
+      if (!msg || typeof msg !== "object") return;
+      if (msg.type === "relogin") {
+        _loginLock = false;
+        setTimeout(() => startBot(), 500);
+      }
+    },
+  };
 
   // File Watcher — تغيير account.txt → hot-swap
   let _watchMtime = 0;
